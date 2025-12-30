@@ -16,6 +16,3 @@ env/
 .idea/
 
 # Large files / Data
-*.mp4
-*.avi
-*.mov

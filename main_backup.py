@@ -18,7 +18,6 @@ class LaneTracker:
         self.left_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.right_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.curve_history = deque(maxlen=15) # Smooth the visual bending
-        self.lane_width_history = deque(maxlen=50) # Adapt to road width
         
         # New: Angle History
         self.left_angle_history = deque(maxlen=HISTORY_LENGTH)
@@ -34,7 +33,7 @@ class LaneTracker:
         self.avg_left_angle = -45
         self.avg_right_angle = 45
 
-    def update(self, lines, frame_width, frame_height, pixel_bases=None):
+    def update(self, lines, frame_width, frame_height):
         # 1. Separate Lines into Left and Right Candidates
         left_lines = []
         right_lines = []
@@ -73,37 +72,17 @@ class LaneTracker:
             # Typical Right Lane: Slope 0.7 -> +35 degrees
             curr_right_angle = np.degrees(np.arctan(slope))
             
-        # 3b. Calculate Current Bottom Positions (Hough Only)
-        hough_left_bot = None
-        hough_right_bot = None
+        # 3b. Calculate Current Bottom Positions
+        curr_left_bot = None
+        curr_right_bot = None
         
         if curr_left_params is not None:
             slope, intercept = curr_left_params
-            hough_left_bot = int((frame_height - intercept) / slope)
+            curr_left_bot = int((frame_height - intercept) / slope)
             
         if curr_right_params is not None:
             slope, intercept = curr_right_params
-            hough_right_bot = int((frame_height - intercept) / slope)
-
-        # --- FUSION STEP (Raw Hough + Raw Pixel) ---
-        curr_left_bot = hough_left_bot
-        curr_right_bot = hough_right_bot
-        
-        if pixel_bases is not None:
-            px_left, px_right = pixel_bases
-            
-            # Fuse Left
-            if hough_left_bot is not None and px_left is not None:
-                 # 70% Hough (Trajectory), 30% Pixel (Base)
-                 curr_left_bot = int(0.7 * hough_left_bot + 0.3 * px_left)
-            elif px_left is not None:
-                 curr_left_bot = px_left # Fallback to pixel if no Hough
-            
-            # Fuse Right
-            if hough_right_bot is not None and px_right is not None:
-                 curr_right_bot = int(0.7 * hough_right_bot + 0.3 * px_right)
-            elif px_right is not None:
-                 curr_right_bot = px_right
+            curr_right_bot = int((frame_height - intercept) / slope)
 
         # 4. Vanishing Point (VP) Calculation
         curr_vp = None
@@ -117,22 +96,10 @@ class LaneTracker:
                 vp_y = int(m1 * vp_x + b1)
                 curr_vp = (vp_x, vp_y)
 
-        # 5. Sanity Checks & History Update
-        vp_ok = False
+        # 5. Update Histories & Smoothing
         if curr_vp is not None:
-            vx, vy = curr_vp
-            # Reject if VP is too high (sky) or too low (hood)
-            if frame_height * 0.2 < vy < frame_height * 0.8:
-                # Reject sudden huge horizontal jumps (>15% width)
-                if len(self.vp_history) > 0:
-                    last_vp = self.vp_history[-1]
-                    if abs(vx - last_vp[0]) < frame_width * 0.15:
-                        vp_ok = True
-                else:
-                    vp_ok = True
-                    
-        if vp_ok:
-            self.vp_history.append(curr_vp)
+            if 0 < curr_vp[0] < frame_width and 0 < curr_vp[1] < frame_height:
+                self.vp_history.append(curr_vp)
         
         if curr_left_angle is not None:
             self.left_angle_history.append(curr_left_angle)
@@ -158,19 +125,10 @@ class LaneTracker:
         if len(self.right_bottom_history) > 0:
             self.avg_right_bottom = int(np.mean(self.right_bottom_history))
 
-        # 6. Fallback / Hallucination Logic (Adaptive Width)
-        current_width_in_history = self.avg_right_bottom - self.avg_left_bottom
-        if current_width_in_history > 200:
-             self.lane_width_history.append(current_width_in_history)
-             
-        # Use average tracked width instead of constant if possible
-        avg_lane_width = LANE_WIDTH_PX
-        if len(self.lane_width_history) > 5:
-            avg_lane_width = int(np.mean(self.lane_width_history))
-            
+        # 6. Fallback / Hallucination Logic
         current_width = self.avg_right_bottom - self.avg_left_bottom
         if current_width < 200: 
-            self.avg_right_bottom = self.avg_left_bottom + avg_lane_width
+            self.avg_right_bottom = self.avg_left_bottom + LANE_WIDTH_PX
         
         # 7. Bounds Checking - Keep lanes within frame
         # Constrain to reasonable bounds (with margin)
@@ -488,26 +446,17 @@ def main():
 
         lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
         
-        # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
-        # 1. Pixel-based detection (Raw)
-        binary_lane = detect_lane_pixels(frame)
-        l_base, r_base = find_lane_boundaries(binary_lane)
-        
         # --- UPDATE TRACKER ---
-        # Pass pixel bases for internal fusion & smoothing
-        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height, pixel_bases=(l_base, r_base))
+        # Now returns coordinates directly AND improved angles
+        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height)
         
         vp_x, vp_y = int(vp_coord[0]), int(vp_coord[1])
         lane_center_x = (l_bottom + r_bottom) // 2
         
-        # Calculate dynamic lane width
-        current_lane_width = r_bottom - l_bottom
+        # 1. Calc Status (New Angle Method)
+        status, raw_curve_val = get_curve_status(left_angle, right_angle)
         
-        # 1. Calc Status (Fixed Signature)
-        # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width
-        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width)
-        
-        # Smooth the curve value (offset)
+        # Smooth the curve value (Angle Balance)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
         
         # 2. Optimal Speed
@@ -537,19 +486,22 @@ def main():
         # 4. Draw CURVED LANES
         line_image = np.zeros_like(frame)
         
-        # Smart Control Point Logic (Clamping)
-        lane_half_width = current_lane_width // 2
-        max_shift = int(lane_half_width * 0.6) # Limit shift to 60% of half-width
-        
+        # Snap to Straight
         if "Straight" in status:
             control_shift_x = 0
         else:
-            # Clamp the shift to prevent overshooting lane boundaries
-            raw_shift = int(smoothed_curve_val * 0.9)
-            control_shift_x = int(np.clip(raw_shift, -max_shift, max_shift))
+            # Reverted to smoothed VP offset approach
+            # Multiplier 0.5 was too stiff? User said 1.2 "overshot".
+            # User said "stiff and overshoots".
+            # Let's try 0.9 (Middle ground) + Better Control Point Height
+            control_shift_x = int(smoothed_curve_val * 0.9) 
         
-        # Control Point Y (60% depth)
-        control_y = int(height - (height - vp_y) * 0.4) 
+        # Control Point Logic (Adjusted Y to reduce stiffness)
+        # Old: (height + vp_y)//2 = 50%
+        # New: 60% from top (closer to bottom means flatter curve?) 
+        # Actually, if we want it to bend SOONER, we need control point closer to car (higher Y)
+        # Let's try 30% from bottom => 70% height
+        control_y = int(height - (height - vp_y) * 0.4) # 40% up from bottom
         
         p0_l = (l_bottom, height)
         p2_l = (vp_x, vp_y)

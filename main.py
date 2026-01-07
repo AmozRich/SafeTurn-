@@ -3,7 +3,7 @@ import numpy as np
 from collections import deque
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "drive1.mp4" 
+VIDEO_PATH = "drive.mp4" 
 LANE_WIDTH_PX = 600 # Approx lane width at bottom of screen
 HISTORY_LENGTH = 10 
 

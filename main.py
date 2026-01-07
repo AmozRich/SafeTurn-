@@ -7,6 +7,10 @@ VIDEO_PATH = "drive.mp4"
 LANE_WIDTH_PX = 600 # Approx lane width at bottom of screen
 HISTORY_LENGTH = 10 
 
+# Display Settings
+DISPLAY_WIDTH = 1280  # Output window width
+DISPLAY_HEIGHT = 720  # Output window height 
+
 # State Persistence
 class LaneTracker:
     def __init__(self):
@@ -92,6 +96,20 @@ class LaneTracker:
         if current_width < 200: 
             self.avg_right_bottom = self.avg_left_bottom + LANE_WIDTH_PX
         
+        # 7. Bounds Checking - Keep lanes within frame
+        # Constrain to reasonable bounds (with margin)
+        margin = 50
+        if self.avg_left_bottom < margin:
+            self.avg_left_bottom = margin
+        if self.avg_right_bottom > frame_width - margin:
+            self.avg_right_bottom = frame_width - margin
+        
+        # Ensure minimum lane width is maintained after bounds check
+        if self.avg_right_bottom - self.avg_left_bottom < 200:
+            center = (self.avg_left_bottom + self.avg_right_bottom) // 2
+            self.avg_left_bottom = center - 100
+            self.avg_right_bottom = center + 100
+        
         # We don't return lines anymore, we return the raw coordinates
         return (self.avg_left_bottom, self.avg_right_bottom, self.avg_vp)
     
@@ -119,6 +137,53 @@ def region_of_interest(image):
     masked_image = cv2.bitwise_and(image, mask)
     return masked_image
 
+def detect_lane_pixels(frame):
+    """
+    Detect white lane marking pixels using color filtering.
+    Returns a binary image with lane pixels highlighted.
+    """
+    # Convert to HLS color space (better for white detection)
+    hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+    
+    # Define range for white color
+    lower_white = np.array([0, 200, 0])
+    upper_white = np.array([255, 255, 255])
+    
+    # Create mask for white pixels
+    white_mask = cv2.inRange(hls, lower_white, upper_white)
+    
+    # Also use grayscale thresholding as backup
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, gray_thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    
+    # Combine both masks
+    combined = cv2.bitwise_or(white_mask, gray_thresh)
+    
+    return combined
+
+def find_lane_boundaries(binary_lane_img):
+    """
+    Use sliding window to find left and right lane boundaries.
+    Returns bottom positions for left and right lanes.
+    """
+    height, width = binary_lane_img.shape
+    
+    # Take histogram of bottom half
+    histogram = np.sum(binary_lane_img[height//2:, :], axis=0)
+    
+    # Find peaks for left and right lanes
+    midpoint = width // 2
+    left_base = np.argmax(histogram[:midpoint])
+    right_base = np.argmax(histogram[midpoint:]) + midpoint
+    
+    # If no strong peaks found, use defaults
+    if histogram[left_base] < 100:
+        left_base = width // 4
+    if histogram[right_base] < 100:
+        right_base = 3 * width // 4
+    
+    return left_base, right_base
+
 # --- LOGIC & VISUALIZATION ---
 
 def get_curve_status(vp_x, lane_center_x):
@@ -132,22 +197,26 @@ def get_curve_status(vp_x, lane_center_x):
     mild_zone = 150 
     
     status = "Straight"
+    # FIXED: Swapped left/right based on user feedback
     if offset > dead_zone:
-        status = "Curve Right" if offset < mild_zone else "Sharp Right"
+        # VP is RIGHT of center = Road curves LEFT (inverted from expected)
+        status = "Curve Left" if offset < mild_zone else "Sharp Left"
     elif offset < -dead_zone:
-        status = "Curve Left" if offset > -mild_zone else "Sharp Left"
+        # VP is LEFT of center = Road curves RIGHT (inverted from expected)
+        status = "Curve Right" if offset > -mild_zone else "Sharp Right"
         
     return status, offset
 
-def generate_bezier_points(p0, p1, p2, num_points=20):
+def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.9):
     """
     Generates points for a Quadratic Bezier curve.
     P0: Start (Bottom)
     P1: Control Point (Controls the bend)
     P2: End (VP)
+    cutoff: Stop at this percentage of the curve (0.9 = 90% to VP)
     """
     points = []
-    for t in np.linspace(0, 1, num_points):
+    for t in np.linspace(0, cutoff, num_points):
         # Quadratic Bezier formula: (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
         x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
         y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
@@ -156,22 +225,66 @@ def generate_bezier_points(p0, p1, p2, num_points=20):
 
 def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord):
     height = image.shape[0]
+    width = image.shape[1]
     
-    # Colors
-    if speed <= optimal_speed:
-        color = (0, 255, 0)
-    elif speed <= optimal_speed + 15:
-        color = (0, 165, 255)
+    # Enhanced Color System (Forza-style)
+    speed_diff = speed - optimal_speed
+    if speed_diff <= 0:
+        # Safe - Bright Blue
+        color = (255, 200, 0)  # Cyan/Blue
+        status_color = (255, 200, 0)
+    elif speed_diff <= 10:
+        # Caution - Yellow/Orange
+        color = (0, 200, 255)  # Orange
+        status_color = (0, 200, 255)
+    elif speed_diff <= 20:
+        # Warning - Orange/Red
+        color = (0, 100, 255)  # Deep Orange
+        status_color = (0, 100, 255)
     else:
-        color = (0, 0, 255)
+        # Danger - Red
+        color = (0, 0, 255)  # Red
+        status_color = (0, 0, 255)
 
-    # Info Text
+    # Modern HUD Panel Background
+    panel_overlay = image.copy()
+    cv2.rectangle(panel_overlay, (10, 20), (420, 240), (20, 20, 20), -1)
+    cv2.addWeighted(panel_overlay, 0.7, image, 0.3, 0, image)
+    
+    # Panel Border
+    cv2.rectangle(image, (10, 20), (420, 240), (60, 60, 60), 3)
+    
+    # Title Bar
+    cv2.rectangle(image, (10, 20), (420, 60), color, -1)
+    cv2.putText(image, "SAFETURN+", (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
+
+    # Speed Display (Large and Prominent)
     font = cv2.FONT_HERSHEY_DUPLEX
-    cv2.putText(image, f"SPEED: {speed} km/h", (30, 80), font, 1.2, color, 2)
-    cv2.putText(image, f"LIMIT: {optimal_speed} km/h", (30, 130), font, 0.8, (200, 200, 200), 1)
-    cv2.putText(image, f"STATUS: {status}", (30, 180), font, 0.8, (255, 255, 255), 1)
+    # Text shadow for depth
+    cv2.putText(image, f"{speed}", (32, 125), font, 2.5, (0, 0, 0), 4)
+    cv2.putText(image, f"{speed}", (30, 123), font, 2.5, color, 3)
+    cv2.putText(image, "km/h", (200, 125), font, 0.9, (180, 180, 180), 2)
+    
+    # Optimal Speed Limit
+    cv2.putText(image, f"LIMIT: {optimal_speed} km/h", (30, 165), font, 0.7, (200, 200, 200), 2)
+    
+    # Status with color coding
+    cv2.putText(image, f"{status.upper()}", (30, 210), font, 0.8, status_color, 2)
+    
+    # Speed Bar Indicator (Visual gauge)
+    bar_x, bar_y = 30, 225
+    bar_width = 360
+    bar_height = 8
+    
+    # Background bar
+    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (60, 60, 60), -1)
+    
+    # Fill bar based on speed vs optimal
+    fill_ratio = min(speed / (optimal_speed + 30), 1.0)
+    fill_width = int(bar_width * fill_ratio)
+    cv2.rectangle(image, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), color, -1)
 
-    # AR Arrow
+    # AR Arrow (Enhanced with glow effect)
     arrow_base = (lane_center_x, height - 80)
     vp_x, vp_y = vp_coord
     
@@ -180,13 +293,18 @@ def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord
     length = np.sqrt(dx**2 + dy**2)
     
     if length > 0:
-        ratio = (length - 60) / length 
+        ratio = (length - 120) / length  # Reduced arrow length
         target_x = int(lane_center_x + dx * ratio)
         target_y = int((height - 80) + dy * ratio)
         
-        cv2.arrowedLine(image, arrow_base, (target_x, target_y), color, 8, tipLength=0.2)
+        # Glow effect (thicker, semi-transparent)
+        cv2.arrowedLine(image, arrow_base, (target_x, target_y), color, 12, tipLength=0.25, line_type=cv2.LINE_AA)
+        # Main arrow
+        cv2.arrowedLine(image, arrow_base, (target_x, target_y), (255, 255, 255), 6, tipLength=0.25, line_type=cv2.LINE_AA)
     
-    cv2.circle(image, arrow_base, 10, color, -1)
+    # Base circle with glow
+    cv2.circle(image, arrow_base, 15, color, -1)
+    cv2.circle(image, arrow_base, 10, (255, 255, 255), -1)
 
 def main():
     if VIDEO_PATH:
@@ -201,11 +319,18 @@ def main():
 
     current_speed = 60 
     
+    # Create resizable window
+    cv2.namedWindow('SafeTurn+ Main', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('SafeTurn+ Main', DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    
     while True:
         ret, frame = cap.read()
         if not ret: 
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
+        
+        # Resize frame to display dimensions
+        frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
             
         width = frame.shape[1]
         height = frame.shape[0]
@@ -235,10 +360,29 @@ def main():
         elif "Curve" in status: optimal_speed = 70
         else: optimal_speed = 100
 
-        # 3. Draw CURVED LANES
+        # 3. Dynamic Lane Colors (Forza-style)
+        speed_diff = current_speed - optimal_speed
+        if speed_diff <= 0:
+            # Safe - Blue/Cyan
+            lane_fill_color = (255, 150, 0)  # Cyan
+            lane_border_color = (255, 200, 0)  # Bright Cyan
+        elif speed_diff <= 10:
+            # Caution - Yellow
+            lane_fill_color = (0, 180, 200)  # Yellow
+            lane_border_color = (0, 220, 255)  # Bright Yellow
+        elif speed_diff <= 20:
+            # Warning - Orange
+            lane_fill_color = (0, 100, 200)  # Orange
+            lane_border_color = (0, 150, 255)  # Bright Orange
+        else:
+            # Danger - Red
+            lane_fill_color = (0, 0, 180)  # Dark Red
+            lane_border_color = (0, 0, 255)  # Bright Red
+
+        # 4. Draw CURVED LANES
         line_image = np.zeros_like(frame)
         
-        # FIX: Snap to Straight
+        # Snap to Straight
         if "Straight" in status:
             control_shift_x = 0
         else:
@@ -259,14 +403,13 @@ def main():
         
         # Create Polygon: Left Points -> Reverse(Right Points)
         poly_points = left_curve_pts + right_curve_pts[::-1]
-        cv2.fillPoly(line_image, [np.array(poly_points, dtype=np.int32)], (0, 50, 0))
+        cv2.fillPoly(line_image, [np.array(poly_points, dtype=np.int32)], lane_fill_color)
         
-        # Draw Borders
-        cv2.polylines(line_image, [np.array(left_curve_pts, dtype=np.int32)], False, (0, 255, 0), 10)
-        cv2.polylines(line_image, [np.array(right_curve_pts, dtype=np.int32)], False, (0, 255, 0), 10)
+        # Draw Borders with glow effect
+        cv2.polylines(line_image, [np.array(left_curve_pts, dtype=np.int32)], False, lane_border_color, 12, lineType=cv2.LINE_AA)
+        cv2.polylines(line_image, [np.array(right_curve_pts, dtype=np.int32)], False, lane_border_color, 12, lineType=cv2.LINE_AA)
         
-        # Draw VP Dot
-        cv2.circle(line_image, (vp_x, vp_y), 15, (0, 255, 255), -1)
+        # Vanishing point dot removed - not needed for driver guidance
 
         combo_image = cv2.addWeighted(frame, 0.8, line_image, 1, 1)
         draw_info_panel(combo_image, current_speed, status, optimal_speed, lane_center_x, (vp_x, vp_y))

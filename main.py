@@ -1,6 +1,11 @@
 import cv2
 import numpy as np
 from collections import deque
+import sys
+import torch
+sys.path.insert(0, 'enet')
+from enet_loader import ENetLaneDetector
+
 
 # --- CONFIGURATION ---
 VIDEO_PATH = "drive.mp4" 
@@ -18,7 +23,6 @@ class LaneTracker:
         self.left_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.right_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.curve_history = deque(maxlen=15) # Smooth the visual bending
-        self.lane_width_history = deque(maxlen=50) # Adapt to road width
         
         # New: Angle History
         self.left_angle_history = deque(maxlen=HISTORY_LENGTH)
@@ -34,7 +38,7 @@ class LaneTracker:
         self.avg_left_angle = -45
         self.avg_right_angle = 45
 
-    def update(self, lines, frame_width, frame_height, pixel_bases=None):
+    def update(self, lines, frame_width, frame_height):
         # 1. Separate Lines into Left and Right Candidates
         left_lines = []
         right_lines = []
@@ -73,37 +77,17 @@ class LaneTracker:
             # Typical Right Lane: Slope 0.7 -> +35 degrees
             curr_right_angle = np.degrees(np.arctan(slope))
             
-        # 3b. Calculate Current Bottom Positions (Hough Only)
-        hough_left_bot = None
-        hough_right_bot = None
+        # 3b. Calculate Current Bottom Positions
+        curr_left_bot = None
+        curr_right_bot = None
         
         if curr_left_params is not None:
             slope, intercept = curr_left_params
-            hough_left_bot = int((frame_height - intercept) / slope)
+            curr_left_bot = int((frame_height - intercept) / slope)
             
         if curr_right_params is not None:
             slope, intercept = curr_right_params
-            hough_right_bot = int((frame_height - intercept) / slope)
-
-        # --- FUSION STEP (Raw Hough + Raw Pixel) ---
-        curr_left_bot = hough_left_bot
-        curr_right_bot = hough_right_bot
-        
-        if pixel_bases is not None:
-            px_left, px_right = pixel_bases
-            
-            # Fuse Left
-            if hough_left_bot is not None and px_left is not None:
-                 # 70% Hough (Trajectory), 30% Pixel (Base)
-                 curr_left_bot = int(0.7 * hough_left_bot + 0.3 * px_left)
-            elif px_left is not None:
-                 curr_left_bot = px_left # Fallback to pixel if no Hough
-            
-            # Fuse Right
-            if hough_right_bot is not None and px_right is not None:
-                 curr_right_bot = int(0.7 * hough_right_bot + 0.3 * px_right)
-            elif px_right is not None:
-                 curr_right_bot = px_right
+            curr_right_bot = int((frame_height - intercept) / slope)
 
         # 4. Vanishing Point (VP) Calculation
         curr_vp = None
@@ -117,22 +101,10 @@ class LaneTracker:
                 vp_y = int(m1 * vp_x + b1)
                 curr_vp = (vp_x, vp_y)
 
-        # 5. Sanity Checks & History Update
-        vp_ok = False
+        # 5. Update Histories & Smoothing
         if curr_vp is not None:
-            vx, vy = curr_vp
-            # Reject if VP is too high (sky) or too low (hood)
-            if frame_height * 0.2 < vy < frame_height * 0.8:
-                # Reject sudden huge horizontal jumps (>15% width)
-                if len(self.vp_history) > 0:
-                    last_vp = self.vp_history[-1]
-                    if abs(vx - last_vp[0]) < frame_width * 0.15:
-                        vp_ok = True
-                else:
-                    vp_ok = True
-                    
-        if vp_ok:
-            self.vp_history.append(curr_vp)
+            if 0 < curr_vp[0] < frame_width and 0 < curr_vp[1] < frame_height:
+                self.vp_history.append(curr_vp)
         
         if curr_left_angle is not None:
             self.left_angle_history.append(curr_left_angle)
@@ -158,19 +130,10 @@ class LaneTracker:
         if len(self.right_bottom_history) > 0:
             self.avg_right_bottom = int(np.mean(self.right_bottom_history))
 
-        # 6. Fallback / Hallucination Logic (Adaptive Width)
-        current_width_in_history = self.avg_right_bottom - self.avg_left_bottom
-        if current_width_in_history > 200:
-             self.lane_width_history.append(current_width_in_history)
-             
-        # Use average tracked width instead of constant if possible
-        avg_lane_width = LANE_WIDTH_PX
-        if len(self.lane_width_history) > 5:
-            avg_lane_width = int(np.mean(self.lane_width_history))
-            
+        # 6. Fallback / Hallucination Logic
         current_width = self.avg_right_bottom - self.avg_left_bottom
         if current_width < 200: 
-            self.avg_right_bottom = self.avg_left_bottom + avg_lane_width
+            self.avg_right_bottom = self.avg_left_bottom + LANE_WIDTH_PX
         
         # 7. Bounds Checking - Keep lanes within frame
         # Constrain to reasonable bounds (with margin)
@@ -311,82 +274,86 @@ def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.8):
         points.append((int(x), int(y)))
     return points
 
-# Professional ADAS-style Display
 def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord):
     height = image.shape[0]
+    width = image.shape[1]
     
-    # --- Professional Color Palette (Automotive Standards) ---
-    # Safe: White/Green (Neutral)
-    # Warning: Amber (Standard automotive warning)
-    # Danger: Red
-    
+    # Professional Automotive Color System (ADAS Standard)
     speed_diff = speed - optimal_speed
-    
     if speed_diff <= 0:
-        # Normal Operation
-        primary_color = (255, 255, 255) # White text
-        status_color = (50, 205, 50)    # Lime Green (Subtle)
-        bg_bar_color = (50, 205, 50)
+        # Safe - Green
+        color = (0, 200, 0)  # Green
+        status_color = (0, 200, 0)
     elif speed_diff <= 10:
-        # Caution
-        primary_color = (255, 255, 255)
-        status_color = (0, 165, 255)    # Orange/Amber
-        bg_bar_color = (0, 165, 255)
+        # Caution - Amber
+        color = (0, 180, 255)  # Amber/Yellow
+        status_color = (0, 180, 255)
+    elif speed_diff <= 20:
+        # Warning - Orange
+        color = (0, 120, 255)  # Orange
+        status_color = (0, 120, 255)
     else:
-        # Danger
-        primary_color = (255, 255, 255)
-        status_color = (0, 0, 255)      # Red
-        bg_bar_color = (0, 0, 255)
-        
-    if "Curve" in status or "Sharp" in status:
-        if speed_diff > 0:
-            status_color = (0, 0, 255) # Red warning if speeding in curve
-        else:
-            status_color = (0, 165, 255) # Amber for curve awareness
+        # Danger - Red
+        color = (0, 0, 255)  # Red
+        status_color = (0, 0, 255)
 
-    # --- Layout Definitions ---
-    panel_x, panel_y = 20, 20
-    panel_w, panel_h = 300, 180
+    # Clean HUD Panel Background
+    panel_overlay = image.copy()
+    cv2.rectangle(panel_overlay, (10, 20), (380, 220), (30, 30, 30), -1)
+    cv2.addWeighted(panel_overlay, 0.75, image, 0.25, 0, image)
     
-    # 1. Background (Clean Semi-Transparent Box)
-    overlay = image.copy()
-    cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+    # Simple Panel Border
+    cv2.rectangle(image, (10, 20), (380, 220), (80, 80, 80), 2)
     
-    # 2. Border (Thin, Professional)
-    cv2.rectangle(image, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (100, 100, 100), 1)
+    # Clean Title Bar
+    cv2.rectangle(image, (10, 20), (380, 55), (50, 50, 50), -1)
+    cv2.putText(image, "SafeTurn+", (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (220, 220, 220), 2)
+
+    # Speed Display (Clean, No Shadows)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(image, f"{speed}", (30, 115), font, 2.2, color, 3)
+    cv2.putText(image, "km/h", (180, 115), font, 0.7, (180, 180, 180), 2)
     
-    # 3. Header
-    font_header = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(image, "SAFETURN ASSIST", (panel_x + 15, panel_y + 30), font_header, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+    # Optimal Speed Limit
+    cv2.putText(image, f"Limit: {optimal_speed} km/h", (30, 150), font, 0.6, (200, 200, 200), 1)
     
-    # 4. Speed Display (Large, Digital)
-    font_nums = cv2.FONT_HERSHEY_DUPLEX
-    cv2.putText(image, f"{speed}", (panel_x + 15, panel_y + 90), font_nums, 2.0, primary_color, 2, cv2.LINE_AA)
-    cv2.putText(image, "km/h", (panel_x + 130, panel_y + 90), font_header, 0.7, (180, 180, 180), 1, cv2.LINE_AA)
+    # Status with color coding
+    cv2.putText(image, f"{status}", (30, 185), font, 0.7, status_color, 2)
     
-    # 5. Speed Limit Info (Discrete)
-    cv2.rectangle(image, (panel_x + 15, panel_y + 110), (panel_x + 85, panel_y + 135), (255, 255, 255), 1)
-    cv2.putText(image, "LIMIT", (panel_x + 20, panel_y + 122), font_header, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(image, f"{optimal_speed}", (panel_x + 20, panel_y + 132), font_header, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    # Clean Speed Bar Indicator
+    bar_x, bar_y = 30, 200
+    bar_width = 320
+    bar_height = 6
     
-    # 6. Status Message (Clean Text)
-    # Map status to professional terms
-    display_status = status.upper()
-    if display_status == "STRAIGHT": display_status = "LANE KEEPING"
+    # Background bar
+    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (60, 60, 60), -1)
     
-    cv2.putText(image, display_status, (panel_x + 15, panel_y + 160), font_header, 0.6, status_color, 2, cv2.LINE_AA)
-    
-    # 7. Projected Path Vector (Simple White/Color Line)
-    # Remove glow, keep functional geometry
+    # Fill bar based on speed vs optimal
+    fill_ratio = min(speed / (optimal_speed + 30), 1.0)
+    fill_width = int(bar_width * fill_ratio)
+    cv2.rectangle(image, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), color, -1)
+
+    # Simple Direction Arrow (No Glow)
+    arrow_base = (lane_center_x, height - 80)
     vp_x, vp_y = vp_coord
-    arrow_base = (lane_center_x, height - 60)
     
-    # Draw simple projected line
-    cv2.line(image, arrow_base, (vp_x, vp_y), (255, 255, 255), 1, cv2.LINE_AA)
-    # Draw endpoint marker
-    cv2.circle(image, (vp_x, vp_y), 4, status_color, -1)
+    dx = vp_x - lane_center_x
+    dy = vp_y - (height - 80)
+    length = np.sqrt(dx**2 + dy**2)
+    
+    if length > 0:
+        ratio = (length - 120) / length
+        target_x = int(lane_center_x + dx * ratio)
+        target_y = int((height - 80) + dy * ratio)
+        
+        # Clean arrow
+        cv2.arrowedLine(image, arrow_base, (target_x, target_y), color, 5, tipLength=0.3, line_type=cv2.LINE_AA)
+    
+    # Simple base circle
+    cv2.circle(image, arrow_base, 8, color, -1)
+    cv2.circle(image, arrow_base, 10, color, 2)
 
+# Debug gauge removed for cleaner professional display
 
 def main():
     if VIDEO_PATH:
@@ -401,9 +368,33 @@ def main():
 
     current_speed = 60 
     
+    # Initialize variables to prevent scope errors
+    frame_id = 0
+    enet_enabled = False
+    last_lane_mask = None
+
+    # Initialize ENet for dense lane detection
+    print("\n[ENet] Initializing lane detector...")
+    try:
+        # Try GPU first, fallback to CPU if unavailable
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[ENet] Using device: {device}")
+        enet = ENetLaneDetector("enet/ENET.pth", device=device)
+        enet_enabled = True
+        last_lane_mask = None
+        frame_id = 0
+        print("[ENet] Activated successfully!")
+    except Exception as e:
+        print(f"[ENet] Could not load ENet: {e}")
+        print("[ENet] Continuing with Hough-based detection only.")
+        enet_enabled = False
+    
     # Create resizable window
     cv2.namedWindow('SafeTurn+ Main', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('SafeTurn+ Main', DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    
+    # Optional: Create ENet visualization window (press 'e' to toggle)
+    show_enet = False
     
     while True:
         ret, frame = cap.read()
@@ -421,29 +412,58 @@ def main():
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         cropped_edges = region_of_interest(edges)
+        
+        # --- ENET INFERENCE (Hybrid Approach) ---
+        # Run ENet every 2nd frame for performance (cache results)
+        if enet_enabled and frame_id % 2 == 0:
+            binary_lane = enet.infer(frame)
+            if binary_lane is not None:
+                last_lane_mask = binary_lane
+        elif enet_enabled:
+            binary_lane = last_lane_mask
+        
+        frame_id += 1
 
         lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
         
-        # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
-        # 1. Pixel-based detection (Raw)
-        binary_lane = detect_lane_pixels(frame)
-        l_base, r_base = find_lane_boundaries(binary_lane)
+        # Optional: Visualize ENet mask (press 'e' to toggle)
+        if enet_enabled and show_enet and last_lane_mask is not None:
+            # Show raw binary mask (what ENet actually detected)
+            debug_mask = last_lane_mask.copy()
+            
+            # Add text overlay with statistics
+            white_pixels = np.sum(debug_mask == 255)
+            total_pixels = debug_mask.shape[0] * debug_mask.shape[1]
+            detection_percentage = (white_pixels / total_pixels) * 100
+            
+            # Convert to color for better visibility
+            debug_color = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+            
+            # Green overlay on detected lanes
+            green_overlay = np.zeros_like(frame)
+            green_overlay[debug_mask == 255] = [0, 255, 0]  # Green where lanes detected
+            enet_overlay = cv2.addWeighted(frame, 0.7, green_overlay, 0.3, 0)
+            
+            # Add debug info
+            cv2.putText(enet_overlay, f"ENet Detection: {detection_percentage:.1f}%", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(enet_overlay, f"White Pixels: {white_pixels}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            
+            cv2.imshow('ENet Lane Mask', enet_overlay)
+            cv2.imshow('ENet Raw Binary', debug_mask)
         
         # --- UPDATE TRACKER ---
-        # Pass pixel bases for internal fusion & smoothing
-        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height, pixel_bases=(l_base, r_base))
+        # Now returns coordinates directly AND improved angles
+        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height)
         
         vp_x, vp_y = int(vp_coord[0]), int(vp_coord[1])
         lane_center_x = (l_bottom + r_bottom) // 2
         
-        # Calculate dynamic lane width
-        current_lane_width = r_bottom - l_bottom
+        # 1. Calc Status (New Angle Method)
+        status, raw_curve_val = get_curve_status(left_angle, right_angle)
         
-        # 1. Calc Status (Fixed Signature)
-        # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width
-        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width)
-        
-        # Smooth the curve value (offset)
+        # Smooth the curve value (Angle Balance)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
         
         # 2. Optimal Speed
@@ -451,41 +471,44 @@ def main():
         elif "Curve" in status: optimal_speed = 70
         else: optimal_speed = 100
 
-        # 3. Dynamic Lane Colors (Professional Safety Standard)
+        # 3. Professional Lane Colors (Automotive Safety Standard)
         speed_diff = current_speed - optimal_speed
         if speed_diff <= 0:
             # Safe - Green
-            lane_fill_color = (0, 100, 0)    # Dark Green fill
-            lane_border_color = (0, 255, 0)  # Bright Green border
+            lane_fill_color = (0, 150, 0)  # Green
+            lane_border_color = (0, 200, 0)  # Bright Green
         elif speed_diff <= 10:
             # Caution - Amber
-            lane_fill_color = (0, 140, 255)  # Dark Orange
-            lane_border_color = (0, 165, 255) # Amber
+            lane_fill_color = (0, 140, 200)  # Amber
+            lane_border_color = (0, 180, 255)  # Bright Amber
         elif speed_diff <= 20:
             # Warning - Orange
-            lane_fill_color = (0, 69, 255)   # Orange Red
-            lane_border_color = (0, 100, 255) # Bright Orange
+            lane_fill_color = (0, 100, 200)  # Orange
+            lane_border_color = (0, 120, 255)  # Bright Orange
         else:
             # Danger - Red
-            lane_fill_color = (0, 0, 139)    # Dark Red
-            lane_border_color = (0, 0, 255)  # Pure Red
+            lane_fill_color = (0, 0, 180)  # Dark Red
+            lane_border_color = (0, 0, 255)  # Bright Red
 
         # 4. Draw CURVED LANES
         line_image = np.zeros_like(frame)
         
-        # Smart Control Point Logic (Clamping)
-        lane_half_width = current_lane_width // 2
-        max_shift = int(lane_half_width * 0.6) # Limit shift to 60% of half-width
-        
+        # Snap to Straight
         if "Straight" in status:
             control_shift_x = 0
         else:
-            # Clamp the shift to prevent overshooting lane boundaries
-            raw_shift = int(smoothed_curve_val * 0.9)
-            control_shift_x = int(np.clip(raw_shift, -max_shift, max_shift))
+            # Reverted to smoothed VP offset approach
+            # Multiplier 0.5 was too stiff? User said 1.2 "overshot".
+            # User said "stiff and overshoots".
+            # Let's try 0.9 (Middle ground) + Better Control Point Height
+            control_shift_x = int(smoothed_curve_val * 0.9) 
         
-        # Control Point Y (60% depth)
-        control_y = int(height - (height - vp_y) * 0.4) 
+        # Reverted Control Point Logic (Previous Stable Version)
+        # 40% up from bottom
+        control_y = int(height - (height - vp_y) * 0.4)
+        
+        # Standard Multiplier (Removed dynamic speed damping)
+        control_shift_x = int(smoothed_curve_val * 0.9) if "Straight" not in status else 0
         
         p0_l = (l_bottom, height)
         p2_l = (vp_x, vp_y)
@@ -503,9 +526,9 @@ def main():
         poly_points = left_curve_pts + right_curve_pts[::-1]
         cv2.fillPoly(line_image, [np.array(poly_points, dtype=np.int32)], lane_fill_color)
         
-        # Draw Borders with glow effect
-        cv2.polylines(line_image, [np.array(left_curve_pts, dtype=np.int32)], False, lane_border_color, 8, lineType=cv2.LINE_AA)
-        cv2.polylines(line_image, [np.array(right_curve_pts, dtype=np.int32)], False, lane_border_color, 8, lineType=cv2.LINE_AA)
+        # Draw clean lane borders
+        cv2.polylines(line_image, [np.array(left_curve_pts, dtype=np.int32)], False, lane_border_color, 6, lineType=cv2.LINE_AA)
+        cv2.polylines(line_image, [np.array(right_curve_pts, dtype=np.int32)], False, lane_border_color, 6, lineType=cv2.LINE_AA)
         
 
         combo_image = cv2.addWeighted(frame, 0.8, line_image, 1, 1)
@@ -520,6 +543,12 @@ def main():
             current_speed = min(current_speed + 2, 140)
         elif key == ord('s'): 
             current_speed = max(current_speed - 5, 0)
+        elif key == ord('e'):
+            # Toggle ENet visualization
+            show_enet = not show_enet
+            if not show_enet:
+                cv2.destroyWindow('ENet Lane Mask')
+            print(f"[ENet] Visualization: {'ON' if show_enet else 'OFF'}")
 
     cap.release()
     cv2.destroyAllWindows()

@@ -1,2 +1,14 @@
-opencv-python
-numpy
+# SafeTurn+ Requirements
+
+# Core Dependencies
+opencv-python>=4.5.0
+numpy>=1.19.0
+
+# Deep Learning (for ENet integration)
+torch>=1.9.0
+torchvision>=0.10.0
+
+# Optional: For GPU acceleration (CUDA)
+# Install PyTorch with CUDA from: https://pytorch.org/get-started/locally/
+# Example for CUDA 11.8:
+# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118

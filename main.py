@@ -220,14 +220,20 @@ class LaneTracker:
 
 tracker = LaneTracker()
 
-def region_of_interest(image):
+def region_of_interest(image, vp_x=None):
     height = image.shape[0]
     width = image.shape[1]
     
+    # Dynamic Apex: Use VP if available, else Center
+    apex_x = vp_x if vp_x is not None else width // 2
+    
+    # Clamp apex to screen bounds (optional safety)
+    apex_x = max(0, min(width, apex_x))
+
     polygons = np.array([
         [
             (0, height), 
-            (width // 2, int(height * 0.55)), # Horizon
+            (apex_x, int(height * 0.55)), # Horizon (Dynamic)
             (width, height) 
         ]
     ])
@@ -470,7 +476,10 @@ def main():
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
-        cropped_edges = region_of_interest(edges)
+        
+        # Dynamic ROI: Focus where the tracker thinks the road is
+        current_vp_x = int(tracker.avg_vp[0])
+        cropped_edges = region_of_interest(edges, vp_x=current_vp_x)
 
         lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
         

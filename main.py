@@ -1,11 +1,15 @@
 import cv2
 import numpy as np
 from collections import deque
+from sensor_bridge import SensorBridge
+from kalman_filter import KalmanFilter
+import time
 
 # --- CONFIGURATION ---
 VIDEO_PATH = "drive.mp4" 
 LANE_WIDTH_PX = 600 # Approx lane width at bottom of screen
 HISTORY_LENGTH = 10 
+USE_SENSORS = False # Set to True when hardware is connected 
 
 # Display Settings
 DISPLAY_WIDTH = 1280  # Output window width
@@ -14,27 +18,53 @@ DISPLAY_HEIGHT = 720  # Output window height
 # State Persistence
 class LaneTracker:
     def __init__(self):
-        self.vp_history = deque(maxlen=HISTORY_LENGTH)
-        self.left_bottom_history = deque(maxlen=HISTORY_LENGTH)
-        self.right_bottom_history = deque(maxlen=HISTORY_LENGTH)
-        self.curve_history = deque(maxlen=15) # Smooth the visual bending
-        self.lane_width_history = deque(maxlen=50) # Adapt to road width
-        
-        # New: Angle History
-        self.left_angle_history = deque(maxlen=HISTORY_LENGTH)
-        self.right_angle_history = deque(maxlen=HISTORY_LENGTH)
-        
-        # Defaults (Center of screen approx)
-        self.avg_vp = (640, 360) 
+        # Initial States (Center of screen approx)
         self.avg_left_bottom = 200
         self.avg_right_bottom = 200 + LANE_WIDTH_PX
-        self.avg_curve = 0
-        
-        # Defaults for angles
+        self.avg_vp = (640, 360) 
         self.avg_left_angle = -45
         self.avg_right_angle = 45
 
-    def update(self, lines, frame_width, frame_height, pixel_bases=None):
+        # Initialize Kalman Filters
+        # Tunning: Smoother (Lower Q, Higher R)
+        q_pos = 0.005   # Process Noise (Trust model more)
+        r_pos = 200.0   # Measurement Noise (Trust input less, heavily smoothed)
+
+        self.kf_left = KalmanFilter(process_noise=q_pos, measurement_noise=r_pos, initial_state=self.avg_left_bottom)
+        self.kf_right = KalmanFilter(process_noise=q_pos, measurement_noise=r_pos, initial_state=self.avg_right_bottom)
+        
+        # VP needs separate X and Y filters
+        self.kf_vp_x = KalmanFilter(process_noise=q_pos, measurement_noise=r_pos, initial_state=640)
+        self.kf_vp_y = KalmanFilter(process_noise=q_pos, measurement_noise=r_pos, initial_state=360)
+        
+        # Angles
+        self.kf_left_angle = KalmanFilter(process_noise=0.1, measurement_noise=10.0, initial_state=-45)
+        self.kf_right_angle = KalmanFilter(process_noise=0.1, measurement_noise=10.0, initial_state=45)
+
+        self.curve_history = deque(maxlen=15) # Keep for curve smoothing as it's a derived value
+        self.lane_width_history = deque(maxlen=50) # Keep for width logic
+
+    def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0):
+        # PREDICTION STEP (Physics)
+        self.kf_left.predict()
+        self.kf_right.predict()
+        self.kf_vp_x.predict()
+        self.kf_vp_y.predict()
+        self.kf_left_angle.predict()
+        self.kf_right_angle.predict()
+
+        # CONTROL INPUT (Yaw Rate)
+        # Shift expectations based on car turning. 
+        # If we turn Left (+yaw), objects move Right on screen (-x).
+        yaw_shift = int(yaw_rate * 300) 
+        
+        # Direct modification of State Position (External Force)
+        self.kf_left.x[0, 0] -= yaw_shift
+        self.kf_right.x[0, 0] -= yaw_shift
+        self.kf_vp_x.x[0, 0] -= yaw_shift
+        # VP Y is mostly unaffected by yaw, maybe pitch, but we ignore for now.
+
+            
         # 1. Separate Lines into Left and Right Candidates
         left_lines = []
         right_lines = []
@@ -117,46 +147,38 @@ class LaneTracker:
                 vp_y = int(m1 * vp_x + b1)
                 curr_vp = (vp_x, vp_y)
 
-        # 5. Sanity Checks & History Update
+        # 5. Sanity Checks & Measurement Update
         vp_ok = False
         if curr_vp is not None:
             vx, vy = curr_vp
-            # Reject if VP is too high (sky) or too low (hood)
             if frame_height * 0.2 < vy < frame_height * 0.8:
-                # Reject sudden huge horizontal jumps (>15% width)
-                if len(self.vp_history) > 0:
-                    last_vp = self.vp_history[-1]
-                    if abs(vx - last_vp[0]) < frame_width * 0.15:
-                        vp_ok = True
-                else:
+                # Basic bounds check vs predicted state
+                pred_vx = self.kf_vp_x.get_position()
+                if abs(vx - pred_vx) < frame_width * 0.2: # Allow 20% jump, else ignore
                     vp_ok = True
-                    
+                # Start up condition
+                if self.kf_vp_x.P[0,0] > 500: vp_ok = True
+
         if vp_ok:
-            self.vp_history.append(curr_vp)
+            self.kf_vp_x.update(curr_vp[0])
+            self.kf_vp_y.update(curr_vp[1])
         
         if curr_left_angle is not None:
-            self.left_angle_history.append(curr_left_angle)
+             self.kf_left_angle.update(curr_left_angle)
         if curr_right_angle is not None:
-            self.right_angle_history.append(curr_right_angle)
+             self.kf_right_angle.update(curr_right_angle)
             
         if curr_left_bot is not None:
-            self.left_bottom_history.append(curr_left_bot)
+             self.kf_left.update(curr_left_bot)
         if curr_right_bot is not None:
-            self.right_bottom_history.append(curr_right_bot)
+             self.kf_right.update(curr_right_bot)
 
-        # Calculate Smoothed Averages
-        if len(self.vp_history) > 0:
-            self.avg_vp = np.mean(self.vp_history, axis=0).astype(int)
-            
-        if len(self.left_angle_history) > 0:
-            self.avg_left_angle = np.mean(self.left_angle_history)
-        if len(self.right_angle_history) > 0:
-            self.avg_right_angle = np.mean(self.right_angle_history)
-
-        if len(self.left_bottom_history) > 0:
-            self.avg_left_bottom = int(np.mean(self.left_bottom_history))
-        if len(self.right_bottom_history) > 0:
-            self.avg_right_bottom = int(np.mean(self.right_bottom_history))
+        # Retrieve Smoothed States
+        self.avg_vp = (int(self.kf_vp_x.get_position()), int(self.kf_vp_y.get_position()))
+        self.avg_left_angle = self.kf_left_angle.get_position()
+        self.avg_right_angle = self.kf_right_angle.get_position()
+        self.avg_left_bottom = int(self.kf_left.get_position())
+        self.avg_right_bottom = int(self.kf_right.get_position())
 
         # 6. Fallback / Hallucination Logic (Adaptive Width)
         current_width_in_history = self.avg_right_bottom - self.avg_left_bottom
@@ -187,7 +209,9 @@ class LaneTracker:
             self.avg_right_bottom = center + 100
         
         # We don't return lines anymore, we return the raw coordinates
-        return self.avg_left_bottom, self.avg_right_bottom, self.avg_vp, self.avg_left_angle, self.avg_right_angle
+        # Also return average lateral velocity (pixel/frame)
+        lat_vel = (self.kf_left.get_velocity() + self.kf_right.get_velocity()) / 2.0
+        return self.avg_left_bottom, self.avg_right_bottom, self.avg_vp, self.avg_left_angle, self.avg_right_angle, lat_vel
     
     def update_curve(self, raw_curve_val):
         self.curve_history.append(raw_curve_val)
@@ -237,10 +261,10 @@ def detect_lane_pixels(frame):
     
     return combined
 
-def find_lane_boundaries(binary_lane_img):
+def find_lane_boundaries(binary_lane_img, search_offset=0):
     """
     Use sliding window to find left and right lane boundaries.
-    Returns bottom positions for left and right lanes.
+    search_offset: Shift the midpoint split (Positive = Look more to right)
     """
     height, width = binary_lane_img.shape
     
@@ -248,7 +272,7 @@ def find_lane_boundaries(binary_lane_img):
     histogram = np.sum(binary_lane_img[height//2:, :], axis=0)
     
     # Find peaks for left and right lanes
-    midpoint = width // 2
+    midpoint = (width // 2) + search_offset
     left_base = np.argmax(histogram[:midpoint])
     right_base = np.argmax(histogram[midpoint:]) + midpoint
     
@@ -266,12 +290,18 @@ def find_lane_boundaries(binary_lane_img):
 last_status = "Straight"
 status_counter = 0
 
-def get_curve_status(vp_x, lane_center_x, lane_width_px=600):
+def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity):
     """
     Decides turning based on relative position of VP vs Lane Center.
-    Uses dynamic thresholds based on lane width (Robust VP Offset method).
+    Uses lateral velocity to detect lane changes.
     """
     global last_status, status_counter
+    
+    # 1. Lane Change Detection
+    # If the lanes are sliding sideways fast (e.g. > 1.5 px/frame), it's a lane change.
+    if abs(lateral_velocity) > 1.5:
+        # Reset curve status to straight during merge so we don't show confusing arrows
+        return "Straight", 0
     
     # VP is smoothed, so this is more stable than raw line angles
     offset = vp_x - lane_center_x
@@ -389,6 +419,16 @@ def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord
 
 
 def main():
+    # Initialize Sensor Bridge
+    bridge = None
+    if USE_SENSORS:
+        try:
+            bridge = SensorBridge(port='COM3', baud=115200) # Adjust COM port as needed
+            bridge.start()
+            time.sleep(1) # Wait for connection
+        except Exception as e:
+            print(f"Sensor Warning: {e}")
+
     if VIDEO_PATH:
         print(f"Reading video from: {VIDEO_PATH}")
         cap = cv2.VideoCapture(VIDEO_PATH)
@@ -399,12 +439,22 @@ def main():
         print("Error: Could not open video source.")
         return
 
-    current_speed = 60 
+    current_speed = 0 
     
     # Create resizable window
     cv2.namedWindow('SafeTurn+ Main', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('SafeTurn+ Main', DISPLAY_WIDTH, DISPLAY_HEIGHT)
     
+    # Initialize Tracker locally
+    tracker = LaneTracker()
+    
+    consecutive_lost_frames = 0
+    tracker_initialized = False # To ignore first-frame jump
+    
+    # Track previous state for Teleport Check
+    prev_l_bot = 0
+    prev_r_bot = 0
+
     while True:
         ret, frame = cap.read()
         if not ret: 
@@ -424,14 +474,59 @@ def main():
 
         lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
         
+        # Get Sensor Data
+        yaw_rate = 0.0
+        current_speed = 0
+        
+        if bridge and USE_SENSORS:
+            sensor_data = bridge.get_latest_data()
+            yaw_rate = sensor_data['yaw']
+            current_speed = int(sensor_data['spd'])
+        
+        # Calculate search offset based on yaw (Biasing the sliding window)
+        # If yaw > 0 (Left Turn), assume lanes shift.
+        search_bias = int(yaw_rate * 200)
+
         # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
         # 1. Pixel-based detection (Raw)
         binary_lane = detect_lane_pixels(frame)
-        l_base, r_base = find_lane_boundaries(binary_lane)
+        l_base, r_base = find_lane_boundaries(binary_lane, search_offset=search_bias)
         
+        # --- SANITY MONITOR ---
+        
+        # 1. Timeout Check (Blindness > 1 sec)
+        # If no Hough lines found, we might be blind.
+        if lines is None:
+            consecutive_lost_frames += 1
+        else:
+            consecutive_lost_frames = 0
+            
+        if consecutive_lost_frames > 30: # Approx 1 sec at 30 FPS
+            print(">> SANITY FAIL: Blind for 1s. Resetting Tracker.")
+            tracker = LaneTracker()
+            consecutive_lost_frames = 0
+            tracker_initialized = False
+
         # --- UPDATE TRACKER ---
         # Pass pixel bases for internal fusion & smoothing
-        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height, pixel_bases=(l_base, r_base))
+        l_bottom, r_bottom, vp_coord, left_angle, right_angle, lat_vel = tracker.update(lines, width, height, pixel_bases=(l_base, r_base), yaw_rate=yaw_rate)
+        
+        # 2. Teleport Check (Physics Impossibility)
+        # Check if lane jumped > 100px in one frame (0.03s)
+        if tracker_initialized:
+            shift_l = abs(l_bottom - prev_l_bot)
+            shift_r = abs(r_bottom - prev_r_bot)
+            
+            if shift_l > 100 or shift_r > 100:
+                print(f">> SANITY FAIL: Teleport Detected (L:{shift_l} R:{shift_r}). Re-acquiring.")
+                tracker = LaneTracker()
+                tracker_initialized = False
+                continue # Skip drawing this frame to avoid glitch
+        
+        # Update history for next check
+        prev_l_bot = l_bottom
+        prev_r_bot = r_bottom
+        tracker_initialized = True
         
         vp_x, vp_y = int(vp_coord[0]), int(vp_coord[1])
         lane_center_x = (l_bottom + r_bottom) // 2
@@ -441,7 +536,7 @@ def main():
         
         # 1. Calc Status (Fixed Signature)
         # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width
-        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width)
+        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width, lat_vel)
         
         # Smooth the curve value (offset)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
@@ -516,11 +611,9 @@ def main():
         key = cv2.waitKey(25) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord('w'): 
-            current_speed = min(current_speed + 2, 140)
-        elif key == ord('s'): 
-            current_speed = max(current_speed - 5, 0)
-
+            
+    if bridge:
+        bridge.stop()
     cap.release()
     cv2.destroyAllWindows()
 

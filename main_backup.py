@@ -3,7 +3,7 @@ import numpy as np
 from collections import deque
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "drive1.mp4" 
+VIDEO_PATH = "drive.mp4" 
 LANE_WIDTH_PX = 600 # Approx lane width at bottom of screen
 HISTORY_LENGTH = 10 
 
@@ -18,6 +18,7 @@ class LaneTracker:
         self.left_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.right_bottom_history = deque(maxlen=HISTORY_LENGTH)
         self.curve_history = deque(maxlen=15) # Smooth the visual bending
+        self.lane_width_history = deque(maxlen=50) # Adapt to road width
         
         # New: Angle History
         self.left_angle_history = deque(maxlen=HISTORY_LENGTH)
@@ -33,7 +34,7 @@ class LaneTracker:
         self.avg_left_angle = -45
         self.avg_right_angle = 45
 
-    def update(self, lines, frame_width, frame_height):
+    def update(self, lines, frame_width, frame_height, pixel_bases=None):
         # 1. Separate Lines into Left and Right Candidates
         left_lines = []
         right_lines = []
@@ -72,17 +73,37 @@ class LaneTracker:
             # Typical Right Lane: Slope 0.7 -> +35 degrees
             curr_right_angle = np.degrees(np.arctan(slope))
             
-        # 3b. Calculate Current Bottom Positions
-        curr_left_bot = None
-        curr_right_bot = None
+        # 3b. Calculate Current Bottom Positions (Hough Only)
+        hough_left_bot = None
+        hough_right_bot = None
         
         if curr_left_params is not None:
             slope, intercept = curr_left_params
-            curr_left_bot = int((frame_height - intercept) / slope)
+            hough_left_bot = int((frame_height - intercept) / slope)
             
         if curr_right_params is not None:
             slope, intercept = curr_right_params
-            curr_right_bot = int((frame_height - intercept) / slope)
+            hough_right_bot = int((frame_height - intercept) / slope)
+
+        # --- FUSION STEP (Raw Hough + Raw Pixel) ---
+        curr_left_bot = hough_left_bot
+        curr_right_bot = hough_right_bot
+        
+        if pixel_bases is not None:
+            px_left, px_right = pixel_bases
+            
+            # Fuse Left
+            if hough_left_bot is not None and px_left is not None:
+                 # 70% Hough (Trajectory), 30% Pixel (Base)
+                 curr_left_bot = int(0.7 * hough_left_bot + 0.3 * px_left)
+            elif px_left is not None:
+                 curr_left_bot = px_left # Fallback to pixel if no Hough
+            
+            # Fuse Right
+            if hough_right_bot is not None and px_right is not None:
+                 curr_right_bot = int(0.7 * hough_right_bot + 0.3 * px_right)
+            elif px_right is not None:
+                 curr_right_bot = px_right
 
         # 4. Vanishing Point (VP) Calculation
         curr_vp = None
@@ -96,10 +117,22 @@ class LaneTracker:
                 vp_y = int(m1 * vp_x + b1)
                 curr_vp = (vp_x, vp_y)
 
-        # 5. Update Histories & Smoothing
+        # 5. Sanity Checks & History Update
+        vp_ok = False
         if curr_vp is not None:
-            if 0 < curr_vp[0] < frame_width and 0 < curr_vp[1] < frame_height:
-                self.vp_history.append(curr_vp)
+            vx, vy = curr_vp
+            # Reject if VP is too high (sky) or too low (hood)
+            if frame_height * 0.2 < vy < frame_height * 0.8:
+                # Reject sudden huge horizontal jumps (>15% width)
+                if len(self.vp_history) > 0:
+                    last_vp = self.vp_history[-1]
+                    if abs(vx - last_vp[0]) < frame_width * 0.15:
+                        vp_ok = True
+                else:
+                    vp_ok = True
+                    
+        if vp_ok:
+            self.vp_history.append(curr_vp)
         
         if curr_left_angle is not None:
             self.left_angle_history.append(curr_left_angle)
@@ -125,10 +158,19 @@ class LaneTracker:
         if len(self.right_bottom_history) > 0:
             self.avg_right_bottom = int(np.mean(self.right_bottom_history))
 
-        # 6. Fallback / Hallucination Logic
+        # 6. Fallback / Hallucination Logic (Adaptive Width)
+        current_width_in_history = self.avg_right_bottom - self.avg_left_bottom
+        if current_width_in_history > 200:
+             self.lane_width_history.append(current_width_in_history)
+             
+        # Use average tracked width instead of constant if possible
+        avg_lane_width = LANE_WIDTH_PX
+        if len(self.lane_width_history) > 5:
+            avg_lane_width = int(np.mean(self.lane_width_history))
+            
         current_width = self.avg_right_bottom - self.avg_left_bottom
         if current_width < 200: 
-            self.avg_right_bottom = self.avg_left_bottom + LANE_WIDTH_PX
+            self.avg_right_bottom = self.avg_left_bottom + avg_lane_width
         
         # 7. Bounds Checking - Keep lanes within frame
         # Constrain to reasonable bounds (with margin)
@@ -269,146 +311,82 @@ def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.8):
         points.append((int(x), int(y)))
     return points
 
+# Professional ADAS-style Display
 def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord):
     height = image.shape[0]
-    width = image.shape[1]
     
-    # Enhanced Color System (Forza-style)
+    # --- Professional Color Palette (Automotive Standards) ---
+    # Safe: White/Green (Neutral)
+    # Warning: Amber (Standard automotive warning)
+    # Danger: Red
+    
     speed_diff = speed - optimal_speed
+    
     if speed_diff <= 0:
-        # Safe - Bright Blue
-        color = (255, 200, 0)  # Cyan/Blue
-        status_color = (255, 200, 0)
+        # Normal Operation
+        primary_color = (255, 255, 255) # White text
+        status_color = (50, 205, 50)    # Lime Green (Subtle)
+        bg_bar_color = (50, 205, 50)
     elif speed_diff <= 10:
-        # Caution - Yellow/Orange
-        color = (0, 200, 255)  # Orange
-        status_color = (0, 200, 255)
-    elif speed_diff <= 20:
-        # Warning - Orange/Red
-        color = (0, 100, 255)  # Deep Orange
-        status_color = (0, 100, 255)
+        # Caution
+        primary_color = (255, 255, 255)
+        status_color = (0, 165, 255)    # Orange/Amber
+        bg_bar_color = (0, 165, 255)
     else:
-        # Danger - Red
-        color = (0, 0, 255)  # Red
-        status_color = (0, 0, 255)
+        # Danger
+        primary_color = (255, 255, 255)
+        status_color = (0, 0, 255)      # Red
+        bg_bar_color = (0, 0, 255)
+        
+    if "Curve" in status or "Sharp" in status:
+        if speed_diff > 0:
+            status_color = (0, 0, 255) # Red warning if speeding in curve
+        else:
+            status_color = (0, 165, 255) # Amber for curve awareness
 
-    # Modern HUD Panel Background
-    panel_overlay = image.copy()
-    cv2.rectangle(panel_overlay, (10, 20), (420, 240), (20, 20, 20), -1)
-    cv2.addWeighted(panel_overlay, 0.7, image, 0.3, 0, image)
+    # --- Layout Definitions ---
+    panel_x, panel_y = 20, 20
+    panel_w, panel_h = 300, 180
     
-    # Panel Border
-    cv2.rectangle(image, (10, 20), (420, 240), (60, 60, 60), 3)
+    # 1. Background (Clean Semi-Transparent Box)
+    overlay = image.copy()
+    cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
     
-    # Title Bar
-    cv2.rectangle(image, (10, 20), (420, 60), color, -1)
-    cv2.putText(image, "SAFETURN+", (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
-
-    # Speed Display (Large and Prominent)
-    font = cv2.FONT_HERSHEY_DUPLEX
-    # Text shadow for depth
-    cv2.putText(image, f"{speed}", (32, 125), font, 2.5, (0, 0, 0), 4)
-    cv2.putText(image, f"{speed}", (30, 123), font, 2.5, color, 3)
-    cv2.putText(image, "km/h", (200, 125), font, 0.9, (180, 180, 180), 2)
+    # 2. Border (Thin, Professional)
+    cv2.rectangle(image, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (100, 100, 100), 1)
     
-    # Optimal Speed Limit
-    cv2.putText(image, f"LIMIT: {optimal_speed} km/h", (30, 165), font, 0.7, (200, 200, 200), 2)
+    # 3. Header
+    font_header = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(image, "SAFETURN ASSIST", (panel_x + 15, panel_y + 30), font_header, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
     
-    # Status with color coding
-    cv2.putText(image, f"{status.upper()}", (30, 210), font, 0.8, status_color, 2)
+    # 4. Speed Display (Large, Digital)
+    font_nums = cv2.FONT_HERSHEY_DUPLEX
+    cv2.putText(image, f"{speed}", (panel_x + 15, panel_y + 90), font_nums, 2.0, primary_color, 2, cv2.LINE_AA)
+    cv2.putText(image, "km/h", (panel_x + 130, panel_y + 90), font_header, 0.7, (180, 180, 180), 1, cv2.LINE_AA)
     
-    # Speed Bar Indicator (Visual gauge)
-    bar_x, bar_y = 30, 225
-    bar_width = 360
-    bar_height = 8
+    # 5. Speed Limit Info (Discrete)
+    cv2.rectangle(image, (panel_x + 15, panel_y + 110), (panel_x + 85, panel_y + 135), (255, 255, 255), 1)
+    cv2.putText(image, "LIMIT", (panel_x + 20, panel_y + 122), font_header, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(image, f"{optimal_speed}", (panel_x + 20, panel_y + 132), font_header, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Background bar
-    cv2.rectangle(image, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (60, 60, 60), -1)
+    # 6. Status Message (Clean Text)
+    # Map status to professional terms
+    display_status = status.upper()
+    if display_status == "STRAIGHT": display_status = "LANE KEEPING"
     
-    # Fill bar based on speed vs optimal
-    fill_ratio = min(speed / (optimal_speed + 30), 1.0)
-    fill_width = int(bar_width * fill_ratio)
-    cv2.rectangle(image, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), color, -1)
-
-    # AR Arrow (Enhanced with glow effect)
-    arrow_base = (lane_center_x, height - 80)
+    cv2.putText(image, display_status, (panel_x + 15, panel_y + 160), font_header, 0.6, status_color, 2, cv2.LINE_AA)
+    
+    # 7. Projected Path Vector (Simple White/Color Line)
+    # Remove glow, keep functional geometry
     vp_x, vp_y = vp_coord
+    arrow_base = (lane_center_x, height - 60)
     
-    dx = vp_x - lane_center_x
-    dy = vp_y - (height - 80)
-    length = np.sqrt(dx**2 + dy**2)
-    
-    if length > 0:
-        ratio = (length - 120) / length  # Reduced arrow length
-        target_x = int(lane_center_x + dx * ratio)
-        target_y = int((height - 80) + dy * ratio)
-        
-        # Glow effect (thicker, semi-transparent)
-        cv2.arrowedLine(image, arrow_base, (target_x, target_y), color, 12, tipLength=0.25, line_type=cv2.LINE_AA)
-        # Main arrow
-        cv2.arrowedLine(image, arrow_base, (target_x, target_y), (255, 255, 255), 6, tipLength=0.25, line_type=cv2.LINE_AA)
-    
-    # Base circle with glow
-    cv2.circle(image, arrow_base, 15, color, -1)
-    cv2.circle(image, arrow_base, 10, (255, 255, 255), -1)
+    # Draw simple projected line
+    cv2.line(image, arrow_base, (vp_x, vp_y), (255, 255, 255), 1, cv2.LINE_AA)
+    # Draw endpoint marker
+    cv2.circle(image, (vp_x, vp_y), 4, status_color, -1)
 
-def draw_debug_gauge(image, angle_balance):
-    """
-    Draws a visual gauge to show Angle Balance (degrees).
-    Straight = 0 deg.
-    Left = Negative.
-    Right = Positive.
-    """
-    h, w = image.shape[:2]
-    center_x = w // 2
-    gauge_y = h - 60
-    gauge_width = 300
-    gauge_height = 20
-    
-    # Thresholds (matching get_curve_status logic)
-    dead_zone = 5.0
-    mild_zone = 15.0
-    
-    # Background
-    cv2.rectangle(image, (center_x - gauge_width//2, gauge_y), 
-                  (center_x + gauge_width//2, gauge_y + gauge_height), (40, 40, 40), -1)
-    
-    # Center Line (Straight)
-    cv2.line(image, (center_x, gauge_y - 5), (center_x, gauge_y + gauge_height + 5), (255, 255, 255), 2)
-    
-    # Dead Zone Area (Green) - Map degrees to pixels
-    # Scale: gauge_width/2 covers approx 20 degrees?
-    max_deg = 20.0
-    scale = (gauge_width / 2) / max_deg
-    
-    dz_px = int(dead_zone * scale)
-    cv2.rectangle(image, (center_x - dz_px, gauge_y + 2), 
-                  (center_x + dz_px, gauge_y + gauge_height - 2), (0, 100, 0), -1)
-    
-    # Threshold Markers (Mild Zone)
-    mild_px = int(mild_zone * scale)
-    thresh_x_left = center_x - mild_px
-    thresh_x_right = center_x + mild_px
-    
-    cv2.line(image, (thresh_x_left, gauge_y), (thresh_x_left, gauge_y + gauge_height), (0, 255, 255), 2)
-    cv2.line(image, (thresh_x_right, gauge_y), (thresh_x_right, gauge_y + gauge_height), (0, 255, 255), 2)
-    
-    # Current Value Indicator
-    val_px = int(angle_balance * scale)
-    val_px = np.clip(val_px, -gauge_width//2, gauge_width//2)
-    indicator_x = center_x + val_px
-    
-    indicator_color = (0, 255, 0) # Green (Straight)
-    if abs(angle_balance) > dead_zone:
-        indicator_color = (0, 255, 255) # Yellow (Curve)
-    if abs(angle_balance) > mild_zone:
-        indicator_color = (0, 0, 255) # Red (Sharp)
-        
-    cv2.circle(image, (indicator_x, gauge_y + gauge_height//2), 8, indicator_color, -1)
-    cv2.circle(image, (indicator_x, gauge_y + gauge_height//2), 6, (255, 255, 255), 1)
-    
-    # Text labels
-    cv2.putText(image, f"ANGLE BAL: {angle_balance:.1f}", (center_x - 60, gauge_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
 def main():
     if VIDEO_PATH:
@@ -446,17 +424,26 @@ def main():
 
         lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
         
+        # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
+        # 1. Pixel-based detection (Raw)
+        binary_lane = detect_lane_pixels(frame)
+        l_base, r_base = find_lane_boundaries(binary_lane)
+        
         # --- UPDATE TRACKER ---
-        # Now returns coordinates directly AND improved angles
-        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height)
+        # Pass pixel bases for internal fusion & smoothing
+        l_bottom, r_bottom, vp_coord, left_angle, right_angle = tracker.update(lines, width, height, pixel_bases=(l_base, r_base))
         
         vp_x, vp_y = int(vp_coord[0]), int(vp_coord[1])
         lane_center_x = (l_bottom + r_bottom) // 2
         
-        # 1. Calc Status (New Angle Method)
-        status, raw_curve_val = get_curve_status(left_angle, right_angle)
+        # Calculate dynamic lane width
+        current_lane_width = r_bottom - l_bottom
         
-        # Smooth the curve value (Angle Balance)
+        # 1. Calc Status (Fixed Signature)
+        # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width
+        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width)
+        
+        # Smooth the curve value (offset)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
         
         # 2. Optimal Speed
@@ -464,44 +451,41 @@ def main():
         elif "Curve" in status: optimal_speed = 70
         else: optimal_speed = 100
 
-        # 3. Dynamic Lane Colors (Forza-style)
+        # 3. Dynamic Lane Colors (Professional Safety Standard)
         speed_diff = current_speed - optimal_speed
         if speed_diff <= 0:
-            # Safe - Blue/Cyan
-            lane_fill_color = (255, 150, 0)  # Cyan
-            lane_border_color = (255, 200, 0)  # Bright Cyan
+            # Safe - Green
+            lane_fill_color = (0, 100, 0)    # Dark Green fill
+            lane_border_color = (0, 255, 0)  # Bright Green border
         elif speed_diff <= 10:
-            # Caution - Yellow
-            lane_fill_color = (0, 180, 200)  # Yellow
-            lane_border_color = (0, 220, 255)  # Bright Yellow
+            # Caution - Amber
+            lane_fill_color = (0, 140, 255)  # Dark Orange
+            lane_border_color = (0, 165, 255) # Amber
         elif speed_diff <= 20:
             # Warning - Orange
-            lane_fill_color = (0, 100, 200)  # Orange
-            lane_border_color = (0, 150, 255)  # Bright Orange
+            lane_fill_color = (0, 69, 255)   # Orange Red
+            lane_border_color = (0, 100, 255) # Bright Orange
         else:
             # Danger - Red
-            lane_fill_color = (0, 0, 180)  # Dark Red
-            lane_border_color = (0, 0, 255)  # Bright Red
+            lane_fill_color = (0, 0, 139)    # Dark Red
+            lane_border_color = (0, 0, 255)  # Pure Red
 
         # 4. Draw CURVED LANES
         line_image = np.zeros_like(frame)
         
-        # Snap to Straight
+        # Smart Control Point Logic (Clamping)
+        lane_half_width = current_lane_width // 2
+        max_shift = int(lane_half_width * 0.6) # Limit shift to 60% of half-width
+        
         if "Straight" in status:
             control_shift_x = 0
         else:
-            # Reverted to smoothed VP offset approach
-            # Multiplier 0.5 was too stiff? User said 1.2 "overshot".
-            # User said "stiff and overshoots".
-            # Let's try 0.9 (Middle ground) + Better Control Point Height
-            control_shift_x = int(smoothed_curve_val * 0.9) 
+            # Clamp the shift to prevent overshooting lane boundaries
+            raw_shift = int(smoothed_curve_val * 0.9)
+            control_shift_x = int(np.clip(raw_shift, -max_shift, max_shift))
         
-        # Control Point Logic (Adjusted Y to reduce stiffness)
-        # Old: (height + vp_y)//2 = 50%
-        # New: 60% from top (closer to bottom means flatter curve?) 
-        # Actually, if we want it to bend SOONER, we need control point closer to car (higher Y)
-        # Let's try 30% from bottom => 70% height
-        control_y = int(height - (height - vp_y) * 0.4) # 40% up from bottom
+        # Control Point Y (60% depth)
+        control_y = int(height - (height - vp_y) * 0.4) 
         
         p0_l = (l_bottom, height)
         p2_l = (vp_x, vp_y)

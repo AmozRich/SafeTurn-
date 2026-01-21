@@ -335,10 +335,10 @@ def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity):
         
     return last_status, offset
 
-def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.8):
+def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.9):
     """
     Generates points for a Quadratic Bezier curve.
-    cutoff: Stop at this percentage of the curve (0.8 = 80% to VP)
+    cutoff: Stop at this percentage of the curve (0.9 = 90% to VP)
     """
     points = []
     for t in np.linspace(0, cutoff, num_points):
@@ -348,80 +348,90 @@ def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.8):
     return points
 
 # Professional ADAS-style Display
-def draw_info_panel(image, speed, status, optimal_speed, lane_center_x, vp_coord):
-    height = image.shape[0]
-    
-    # --- Professional Color Palette (Automotive Standards) ---
-    # Safe: White/Green (Neutral)
-    # Warning: Amber (Standard automotive warning)
-    # Danger: Red
-    
-    speed_diff = speed - optimal_speed
-    
-    if speed_diff <= 0:
-        # Normal Operation
-        primary_color = (255, 255, 255) # White text
-        status_color = (50, 205, 50)    # Lime Green (Subtle)
-        bg_bar_color = (50, 205, 50)
-    elif speed_diff <= 10:
-        # Caution
-        primary_color = (255, 255, 255)
-        status_color = (0, 165, 255)    # Orange/Amber
-        bg_bar_color = (0, 165, 255)
-    else:
-        # Danger
-        primary_color = (255, 255, 255)
-        status_color = (0, 0, 255)      # Red
-        bg_bar_color = (0, 0, 255)
-        
-    if "Curve" in status or "Sharp" in status:
-        if speed_diff > 0:
-            status_color = (0, 0, 255) # Red warning if speeding in curve
-        else:
-            status_color = (0, 165, 255) # Amber for curve awareness
-
-    # --- Layout Definitions ---
-    panel_x, panel_y = 20, 20
-    panel_w, panel_h = 300, 180
-    
-    # 1. Background (Clean Semi-Transparent Box)
-    overlay = image.copy()
-    cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
-    
-    # 2. Border (Thin, Professional)
-    cv2.rectangle(image, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (100, 100, 100), 1)
-    
-    # 3. Header
-    font_header = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(image, "SAFETURN ASSIST", (panel_x + 15, panel_y + 30), font_header, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
-    
-    # 4. Speed Display (Large, Digital)
-    font_nums = cv2.FONT_HERSHEY_DUPLEX
-    cv2.putText(image, f"{speed}", (panel_x + 15, panel_y + 90), font_nums, 2.0, primary_color, 2, cv2.LINE_AA)
-    cv2.putText(image, "km/h", (panel_x + 130, panel_y + 90), font_header, 0.7, (180, 180, 180), 1, cv2.LINE_AA)
-    
-    # 5. Speed Limit Info (Discrete)
-    cv2.rectangle(image, (panel_x + 15, panel_y + 110), (panel_x + 85, panel_y + 135), (255, 255, 255), 1)
-    cv2.putText(image, "LIMIT", (panel_x + 20, panel_y + 122), font_header, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(image, f"{optimal_speed}", (panel_x + 20, panel_y + 132), font_header, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
-    
-    # 6. Status Message (Clean Text)
-    # Map status to professional terms
-    display_status = status.upper()
-    if display_status == "STRAIGHT": display_status = "LANE KEEPING"
-    
-    cv2.putText(image, display_status, (panel_x + 15, panel_y + 160), font_header, 0.6, status_color, 2, cv2.LINE_AA)
-    
-    # 7. Projected Path Vector (Simple White/Color Line)
-    # Remove glow, keep functional geometry
+# Professional Minimalist AR Display
+def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts, vp_coord, lane_width_px):
+    height, width = image.shape[:2]
     vp_x, vp_y = vp_coord
-    arrow_base = (lane_center_x, height - 60)
     
-    # Draw simple projected line
-    cv2.line(image, arrow_base, (vp_x, vp_y), (255, 255, 255), 1, cv2.LINE_AA)
-    # Draw endpoint marker
-    cv2.circle(image, (vp_x, vp_y), 4, status_color, -1)
+    # --- 1. THE AR LANE (Wireframe Grid) ---
+    # Instead of a solid carpet, we draw a "Ladder" or "Grid"
+    overlay = image.copy()
+    
+    # Create the polygon points
+    poly_points = left_pts + right_pts[::-1]
+    
+    # A. The Subtle Fill (Very transparent)
+    # We use a much lower alpha (0.2) so you can see potholes through it
+    color_fill = (0, 255, 100) # Cyber Green
+    if "Curve" in status: color_fill = (0, 165, 255) # Amber
+    if "Sharp" in status: color_fill = (0, 0, 255)   # Red
+    
+    cv2.fillPoly(overlay, [np.array(poly_points, dtype=np.int32)], color_fill)
+    cv2.addWeighted(overlay, 0.2, image, 0.8, 0, image) # 20% opacity
+    
+    # B. The "Ladder" Effect (Horizontal rungs)
+    # Draw lines connecting left and right boundaries every 10th point
+    # This gives the "3D Terrain" look
+    num_pts = len(left_pts)
+    step = 4 # Draw a rung every 4 points
+    
+    for i in range(0, num_pts, step):
+        pt_l = left_pts[i]
+        pt_r = right_pts[i]
+        # Make lines thinner as they get further away (depth perception)
+        thickness = 2 if i > num_pts // 2 else 1 
+        cv2.line(image, pt_l, pt_r, color_fill, thickness, cv2.LINE_AA)
+
+    # C. The Glow Borders
+    cv2.polylines(image, [np.array(left_pts, dtype=np.int32)], False, color_fill, 2, cv2.LINE_AA)
+    cv2.polylines(image, [np.array(right_pts, dtype=np.int32)], False, color_fill, 2, cv2.LINE_AA)
+
+    # --- 2. THE FLOATING HUD (No Box) ---
+    # We place the data near the bottom center (Heads Up style)
+    # or "Floating" near the VP.
+    
+    center_x = width // 2
+    hud_y = height - 120 # Just above the hood
+    
+    # Font Settings
+    font = cv2.FONT_HERSHEY_DUPLEX
+    
+    # A. Speed (Big, Centered)
+    speed_text = f"{speed}"
+    text_size = cv2.getTextSize(speed_text, font, 2.5, 3)[0]
+    text_x = center_x - (text_size[0] // 2)
+    
+    # Drop Shadow for readability against any road color
+    cv2.putText(image, speed_text, (text_x + 2, hud_y + 2), font, 2.5, (0,0,0), 3, cv2.LINE_AA)
+    cv2.putText(image, speed_text, (text_x, hud_y), font, 2.5, (255, 255, 255), 3, cv2.LINE_AA)
+    
+    # "km/h" label next to it
+    cv2.putText(image, "km/h", (text_x + text_size[0] + 10, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+
+    # B. Status / Curve Warning (Below Speed)
+    if status != "Straight":
+        status_text = status.upper()
+        s_size = cv2.getTextSize(status_text, font, 0.8, 2)[0]
+        s_x = center_x - (s_size[0] // 2)
+        
+        # Background pill for status
+        cv2.rectangle(image, (s_x - 10, hud_y + 20), (s_x + s_size[0] + 10, hud_y + 55), (0, 0, 0), -1)
+        # Text
+        cv2.putText(image, status_text, (s_x, hud_y + 45), font, 0.8, color_fill, 1, cv2.LINE_AA)
+    
+    # C. Dynamic Brackets (The "Target" Lock)
+    # Visual cues that hug the lane center
+    bracket_w = 40
+    bracket_h = 200
+    b_color = (255, 255, 255)
+    
+    # Left Bracket
+    l_x = int(vp_x - lane_width_px * 0.4)
+    r_x = int(vp_x + lane_width_px * 0.4)
+    
+    # Draw simple vertical marks at the horizon line
+    cv2.line(image, (l_x, vp_y - 20), (l_x, vp_y + 20), b_color, 1, cv2.LINE_AA)
+    cv2.line(image, (r_x, vp_y - 20), (r_x, vp_y + 20), b_color, 1, cv2.LINE_AA)
 
 
 def main():
@@ -555,27 +565,7 @@ def main():
         elif "Curve" in status: optimal_speed = 70
         else: optimal_speed = 100
 
-        # 3. Dynamic Lane Colors (Professional Safety Standard)
-        speed_diff = current_speed - optimal_speed
-        if speed_diff <= 0:
-            # Safe - Green
-            lane_fill_color = (0, 100, 0)    # Dark Green fill
-            lane_border_color = (0, 255, 0)  # Bright Green border
-        elif speed_diff <= 10:
-            # Caution - Amber
-            lane_fill_color = (0, 140, 255)  # Dark Orange
-            lane_border_color = (0, 165, 255) # Amber
-        elif speed_diff <= 20:
-            # Warning - Orange
-            lane_fill_color = (0, 69, 255)   # Orange Red
-            lane_border_color = (0, 100, 255) # Bright Orange
-        else:
-            # Danger - Red
-            lane_fill_color = (0, 0, 139)    # Dark Red
-            lane_border_color = (0, 0, 255)  # Pure Red
-
-        # 4. Draw CURVED LANES
-        line_image = np.zeros_like(frame)
+        # 4. Draw MINIMALIST AR HUD
         
         # Smart Control Point Logic (Clamping)
         lane_half_width = current_lane_width // 2
@@ -602,20 +592,19 @@ def main():
         # Generate Points
         left_curve_pts = generate_bezier_points(p0_l, p1_l, p2_l, 40)
         right_curve_pts = generate_bezier_points(p0_r, p1_r, p2_r, 40)
-        
-        # Create Polygon: Left Points -> Reverse(Right Points)
-        poly_points = left_curve_pts + right_curve_pts[::-1]
-        cv2.fillPoly(line_image, [np.array(poly_points, dtype=np.int32)], lane_fill_color)
-        
-        # Draw Borders with glow effect
-        cv2.polylines(line_image, [np.array(left_curve_pts, dtype=np.int32)], False, lane_border_color, 8, lineType=cv2.LINE_AA)
-        cv2.polylines(line_image, [np.array(right_curve_pts, dtype=np.int32)], False, lane_border_color, 8, lineType=cv2.LINE_AA)
-        
 
-        combo_image = cv2.addWeighted(frame, 0.8, line_image, 1, 1)
-        draw_info_panel(combo_image, current_speed, status, optimal_speed, lane_center_x, (vp_x, vp_y))
-        
-        cv2.imshow('SafeTurn+ Main', combo_image)
+        draw_minimalist_hud(
+            frame, 
+            current_speed, 
+            status, 
+            optimal_speed, 
+            left_curve_pts, 
+            right_curve_pts, 
+            (vp_x, vp_y),
+            current_lane_width
+        )
+
+        cv2.imshow('SafeTurn+ Main', frame)
 
         key = cv2.waitKey(25) & 0xFF
         if key == ord('q'):

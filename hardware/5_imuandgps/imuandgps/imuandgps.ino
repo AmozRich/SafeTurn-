@@ -39,42 +39,38 @@ void loop()
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-  Serial.println("---- MPU ----");
-
-  Serial.print("Accel: ");
-  Serial.print(ax); Serial.print(" ");
-  Serial.print(ay); Serial.print(" ");
-  Serial.println(az);
-
-  Serial.print("Gyro: ");
-  Serial.print(gx); Serial.print(" ");
-  Serial.print(gy); Serial.print(" ");
-  Serial.println(gz);
-
-  // Print GPS
-  if (gps.location.isValid())
-  {
-    Serial.println("---- GPS ----");
-
-    Serial.print("Lat: ");
-    Serial.println(gps.location.lat(), 6);
-
-    Serial.print("Lng: ");
-    Serial.println(gps.location.lng(), 6);
-
+  // Create JSON output
+  Serial.print("{\"yaw\": ");
+  // We use Gyro Z for approximate yaw rate (Z-axis rotation)
+  // MPU6050 raw range is typically +/- 32768 for +/- 250 deg/s
+  // Convert raw to deg/s
+  float yaw_rate = gz / 131.0;
+  Serial.print(yaw_rate);
+  
+  Serial.print(", \"lat\": ");
+  if (gps.location.isValid()) {
+    Serial.print(gps.location.lat(), 6);
+  } else {
+    Serial.print(0.0);
+  }
+  
+  Serial.print(", \"lng\": ");
+  if (gps.location.isValid()) {
+    Serial.print(gps.location.lng(), 6);
+  } else {
+    Serial.print(0.0);
+  }
+  
+  Serial.print(", \"spd\": ");
+  if (gps.location.isValid()) {
     float speed = gps.speed.kmph();
     if(speed < 2.5) speed = 0;
-
-    Serial.print("Speed: ");
     Serial.print(speed);
-    Serial.println(" km/h");
+  } else {
+    Serial.print(0.0);
   }
-  else
-  {
-    Serial.println("Waiting for GPS...");
-  }
+  
+  Serial.println(", \"crash\": false}");
 
-  Serial.println("----------------");
-
-  delay(500);
+  delay(100);
 }

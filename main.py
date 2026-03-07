@@ -6,9 +6,9 @@ from sensor_bridge import SensorBridge
 
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "drive.mp4" 
+VIDEO_PATH = None # Set to None or "" to use the live webcam feed
 HISTORY_LENGTH = 10 
-USE_SENSORS = False # Set to True when hardware is connected 
+USE_SENSORS = True # Set to True when hardware is connected 
 
 SAFE_ROAD_WIDTH = 800 # Adjusted for narrow Kerala roads
 
@@ -80,6 +80,10 @@ def find_lane_boundaries(binary_lane_img, search_offset=0):
     
     # Find peaks for left and right lanes
     midpoint = (width // 2) + search_offset
+    
+    # Clamp midpoint to prevent argmax on empty sequences
+    midpoint = max(10, min(width - 10, midpoint))
+    
     left_base = np.argmax(histogram[:midpoint])
     right_base = np.argmax(histogram[midpoint:]) + midpoint
     
@@ -242,7 +246,7 @@ def main():
     bridge = None
     if USE_SENSORS:
         try:
-            bridge = SensorBridge(port='COM3', baud=115200) # Adjust COM port as needed
+            bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
             bridge.start()
             time.sleep(1) # Wait for connection
         except Exception as e:

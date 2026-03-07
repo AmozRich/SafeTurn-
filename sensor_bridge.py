@@ -53,8 +53,11 @@ class SensorBridge:
                         except json.JSONDecodeError:
                             pass # Corrupt packet
             except Exception as e:
-                print(f"Bridge Error: {e}")
-                time.sleep(0.1)
+                print(f"Bridge Error: {e} - attempting reconnect...")
+                self.serial_conn = None
+                time.sleep(2)
+                self.start()
+                break
 
     def get_latest_data(self):
         with self.lock:

@@ -1,16 +1,16 @@
 import cv2
 import numpy as np
+import time
 from tracker import LaneTracker, LANE_WIDTH_PX
+from sensor_bridge import SensorBridge
 
-
-tracker = LaneTracker()
 
 # --- CONFIGURATION ---
 VIDEO_PATH = "drive.mp4" 
 HISTORY_LENGTH = 10 
 USE_SENSORS = False # Set to True when hardware is connected 
 
-SAFE_ROAD_WIDTH = 450 # Adjusted for narrow Kerala roads
+SAFE_ROAD_WIDTH = 800 # Adjusted for narrow Kerala roads
 
 # Display Settings
 DISPLAY_WIDTH = 1280  # Output window width
@@ -39,27 +39,32 @@ def region_of_interest(image, vp_x=None):
     masked_image = cv2.bitwise_and(image, mask)
     return masked_image
 
-def detect_lane_pixels(frame):
+def detect_lane_pixels(frame, gray=None):
     """
-    Detect white lane marking pixels using color filtering.
+    Detect white and yellow lane marking pixels using color filtering.
     Returns a binary image with lane pixels highlighted.
     """
-    # Convert to HLS color space (better for white detection)
+    # Convert to HLS color space
     hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
     
     # Define range for white color
     lower_white = np.array([0, 200, 0])
     upper_white = np.array([255, 255, 255])
-    
-    # Create mask for white pixels
     white_mask = cv2.inRange(hls, lower_white, upper_white)
     
+    # Define range for yellow color (Kerala roads often have yellow center lines)
+    lower_yellow = np.array([15, 100, 100])
+    upper_yellow = np.array([35, 255, 255])
+    yellow_mask = cv2.inRange(hls, lower_yellow, upper_yellow)
+    
     # Also use grayscale thresholding as backup
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if gray is None:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     _, gray_thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
     
-    # Combine both masks
-    combined = cv2.bitwise_or(white_mask, gray_thresh)
+    # Combine masks: White OR Yellow OR Grayscale
+    color_mask = cv2.bitwise_or(white_mask, yellow_mask)
+    combined = cv2.bitwise_or(color_mask, gray_thresh)
     
     return combined
 
@@ -142,12 +147,10 @@ def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.9):
     Generates points for a Quadratic Bezier curve.
     cutoff: Stop at this percentage of the curve (0.9 = 90% to VP)
     """
-    points = []
-    for t in np.linspace(0, cutoff, num_points):
-        x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
-        y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
-        points.append((int(x), int(y)))
-    return points
+    t = np.linspace(0, cutoff, num_points)
+    x = ((1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]).astype(int)
+    y = ((1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]).astype(int)
+    return list(zip(x, y))
 
 # Professional ADAS-style Display
 # Professional Minimalist AR Display
@@ -223,8 +226,6 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
     
     # C. Dynamic Brackets (The "Target" Lock)
     # Visual cues that hug the lane center
-    bracket_w = 40
-    bracket_h = 200
     b_color = (255, 255, 255)
     
     # Left Bracket
@@ -281,19 +282,30 @@ def main():
         
         # Resize frame to display dimensions
         frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-            
-        width = frame.shape[1]
-        height = frame.shape[0]
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Performance Optimization: Process at half resolution
+        PROC_WIDTH, PROC_HEIGHT = 640, 360
+        proc_frame = cv2.resize(frame, (PROC_WIDTH, PROC_HEIGHT))
+        
+        gray = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         
-        # Dynamic ROI: Focus where the tracker thinks the road is
-        current_vp_x = int(tracker.avg_vp[0])
-        cropped_edges = region_of_interest(edges, vp_x=current_vp_x)
+        # Dynamic ROI: Focus where the tracker thinks the road is (scaled)
+        current_vp_x_proc = int(tracker.avg_vp[0] * PROC_WIDTH / DISPLAY_WIDTH)
+        cropped_edges = region_of_interest(edges, vp_x=current_vp_x_proc)
 
-        lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=40, maxLineGap=100)
+        # Adjust Hough parameters for half resolution
+        lines = cv2.HoughLinesP(cropped_edges, 2, np.pi/180, 80, np.array([]), minLineLength=20, maxLineGap=50)
+        
+        # Scale lines back to DISPLAY_WIDTH
+        if lines is not None:
+            lines = lines * np.array([DISPLAY_WIDTH/PROC_WIDTH, DISPLAY_HEIGHT/PROC_HEIGHT, 
+                                      DISPLAY_WIDTH/PROC_WIDTH, DISPLAY_HEIGHT/PROC_HEIGHT], dtype=np.float32)
+            lines = lines.astype(np.int32)
+            
+        width = frame.shape[1]
+        height = frame.shape[0]
         
         # Get Sensor Data
         yaw_rate = 0.0
@@ -305,13 +317,16 @@ def main():
             current_speed = int(sensor_data['spd'])
         
         # Calculate search offset based on yaw (Biasing the sliding window)
-        # If yaw > 0 (Left Turn), assume lanes shift.
         search_bias = int(yaw_rate * 200)
 
         # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
-        # 1. Pixel-based detection (Raw)
-        binary_lane = detect_lane_pixels(frame)
-        l_base, r_base = find_lane_boundaries(binary_lane, search_offset=search_bias)
+        # 1. Pixel-based detection (Raw) - use proc_frame & precomputed gray
+        binary_lane = detect_lane_pixels(proc_frame, gray=gray)
+        l_base_proc, r_base_proc = find_lane_boundaries(binary_lane, search_offset=search_bias//2)
+        
+        # Scale bases back to display dimensions
+        l_base = int(l_base_proc * DISPLAY_WIDTH / PROC_WIDTH)
+        r_base = int(r_base_proc * DISPLAY_WIDTH / PROC_WIDTH)
         
         # --- SANITY MONITOR ---
         
@@ -339,10 +354,11 @@ def main():
             shift_r = abs(r_bottom - prev_r_bot)
             
             if shift_l > 100 or shift_r > 100:
-                print(f">> SANITY FAIL: Teleport Detected (L:{shift_l} R:{shift_r}). Re-acquiring.")
-                tracker = LaneTracker()
-                tracker_initialized = False
-                continue # Skip drawing this frame to avoid glitch
+                print(f">> SANITY FAIL: Teleport Detected (L:{shift_l} R:{shift_r}). Increasing covariance.")
+                # Gentler approach: increase Kalman covariance instead of full wipe
+                tracker.kf_left.P *= 10
+                tracker.kf_right.P *= 10
+                # Do not re-initialize tracker_initialized to False, keep it running
         
         # Update history for next check
         prev_l_bot = l_bottom
@@ -390,11 +406,17 @@ def main():
         p2_l = (vp_x, vp_y)
         p1_l = ((l_bottom + vp_x)//2 + control_shift_x, control_y)
         
-        # 2. Derive the Right Path by offsetting from the Left
-        # Instead of using a noisy 'r_bottom', we use the left path + a fixed safe width
-        p0_r = (l_bottom + SAFE_ROAD_WIDTH, height)
-        p2_r = (vp_x, vp_y) # They still converge at the same Vanishing Point
-        p1_r = (p1_l[0] + (SAFE_ROAD_WIDTH // 2), control_y) # Offset the control point too
+        # 2. Derive the Right Path by using the tracked right lane but clamping it
+        # to ensure it adapts to road width, guided by SAFE_ROAD_WIDTH
+        actual_width = r_bottom - l_bottom
+        # Clamp width heavily between SAFE_ROAD_WIDTH-100 and SAFE_ROAD_WIDTH+100
+        safe_r_bottom = l_bottom + np.clip(actual_width, SAFE_ROAD_WIDTH - 100, SAFE_ROAD_WIDTH + 100)
+        
+        p0_r = (safe_r_bottom, height)
+        p2_r = (vp_x, vp_y) 
+        # Control point uses a similar logic for stable curves
+        safe_p1_x = int(p1_l[0] + (safe_r_bottom - l_bottom) // 2)
+        p1_r = (safe_p1_x, control_y)
         
         # Generate Points
         left_curve_pts = generate_bezier_points(p0_l, p1_l, p2_l, 40)

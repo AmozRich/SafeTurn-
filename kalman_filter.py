@@ -63,7 +63,8 @@ class KalmanFilter:
         S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
         
         # Kalman Gain
-        K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
+        # S is 1x1 scalar, so divide avoiding matrix inversion
+        K = np.dot(self.P, self.H.T) / S[0, 0]
         
         # Update State
         self.x = self.x + np.dot(K, y)

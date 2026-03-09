@@ -135,10 +135,22 @@ def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_r
         current_status = "Curve Right" if offset > -mild_zone else "Sharp Right"
 
     # --- SENSOR FUSION LOGIC ---
-    # If IMU detects rotation but Vision doesn't see a curve, 
-    # it might be a 'Blind Curve' or a lane change.
-    if abs(yaw_rate) > 5.0 and current_status == "Straight":
-        current_status = "Active Maneuver" # The HUD reacts to the physical turn
+    global USE_SENSORS
+    if USE_SENSORS:
+        if yaw_rate > 25.0:
+            current_status = "Sharp Left"
+        elif yaw_rate > 11.0:
+            current_status = "Curve Left"
+        elif yaw_rate > 5.0:
+            current_status = "Mild Curve Left"
+        elif yaw_rate < -25.0:
+            current_status = "Sharp Right"
+        elif yaw_rate < -11.0:
+            current_status = "Curve Right"
+        elif yaw_rate < -5.0:
+            current_status = "Mild Curve Right"
+        else:
+            current_status = "Straight"
         
     # Hysteresis
     if current_status != last_status:

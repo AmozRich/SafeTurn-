@@ -16,7 +16,7 @@ def test_sensors():
         while True:
             data = bridge.get_latest_data()
             print(f"Data: {data}")
-            time.sleep(0.50)  # Print 2 times a second
+            time.sleep(0.25)  # Print 4 times a second
             
     except KeyboardInterrupt:
         print("\nStopping test...")

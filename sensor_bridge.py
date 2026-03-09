@@ -15,6 +15,9 @@ class SensorBridge:
             "spd": 0.0,
             "crash": False
         }
+        self.offsets = {
+            "yaw": 0.0
+        }
         self.lock = threading.Lock()
         self.thread = None
         self.serial_conn = None
@@ -59,6 +62,25 @@ class SensorBridge:
                 self.start()
                 break
 
+    def calibrate(self, duration=2.0):
+        print(f"Starting sensor calibration for {duration} seconds...")
+        end_time = time.time() + duration
+        yaw_samples = []
+        while time.time() < end_time and self.running:
+            with self.lock:
+                yaw_samples.append(self.latest_data['yaw'])
+            time.sleep(0.05)
+            
+        if yaw_samples:
+            avg_yaw = sum(yaw_samples) / len(yaw_samples)
+            with self.lock:
+                self.offsets['yaw'] = avg_yaw
+            print(f"Calibration complete: Yaw Offset = {avg_yaw}")
+            return True
+        return False
+
     def get_latest_data(self):
         with self.lock:
-            return self.latest_data.copy()
+            data = self.latest_data.copy()
+            data['yaw'] -= self.offsets['yaw']
+            return data

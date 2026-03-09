@@ -1,14 +1,19 @@
 import cv2
 import numpy as np
 import time
+import os
+import csv
+from datetime import datetime
 from tracker import LaneTracker, LANE_WIDTH_PX
 from sensor_bridge import SensorBridge
+from start_screen import StartScreen
 
 
 # --- CONFIGURATION ---
-VIDEO_PATH = None # Set to None or "" to use the live webcam feed
+VIDEO_PATH = "drive.mp4" # Set to None or "" to use the live webcam feed
 HISTORY_LENGTH = 10 
-USE_SENSORS = True # Set to True when hardware is connected 
+USE_SENSORS = False # Overridden by UI 
+USE_WEBCAM = False # Overridden by UI 
 
 SAFE_ROAD_WIDTH = 800 # Adjusted for narrow Kerala roads
 
@@ -242,24 +247,58 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
 
 
 def main():
-    # Initialize Sensor Bridge
+    # Attempt to initialize Sensor Bridge early for calibration
     bridge = None
-    if USE_SENSORS:
-        try:
-            bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
-            bridge.start()
-            time.sleep(1) # Wait for connection
-        except Exception as e:
-            print(f"Sensor Warning: {e}")
+    try:
+        bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
+        bridge.start()
+        time.sleep(1) # Wait for connection
+    except Exception as e:
+        print(f"Sensor Warning: {e}")
+        bridge = None
 
-    if VIDEO_PATH:
+    # Launch Start Screen
+    screen = StartScreen(bridge=bridge)
+    start_mode, use_sensors, use_webcam, webcam_index = screen.show()
+    
+    if start_mode == "None":
+        if bridge:
+            bridge.stop()
+        print("Application closed from launcher.")
+        return
+        
+    global USE_SENSORS
+    global USE_WEBCAM
+    USE_SENSORS = use_sensors
+    USE_WEBCAM = use_webcam
+    
+    # If user chose not to use sensors, shut down the bridge we span up for calib
+    if not USE_SENSORS and bridge:
+        bridge.stop()
+        bridge = None
+
+    if start_mode == "Pothole":
+        import pothole_analysis
+        print("Launching Pothole Scanner...")
+        pothole_analysis.run_pothole_detection(VIDEO_PATH, bridge, USE_SENSORS, USE_WEBCAM, webcam_index)
+        if bridge:
+            bridge.stop()
+        return
+
+    if USE_WEBCAM:
+        print(f"Reading video from: Live Webcam (Index {webcam_index})")
+        cap = cv2.VideoCapture(webcam_index)
+    elif VIDEO_PATH:
         print(f"Reading video from: {VIDEO_PATH}")
         cap = cv2.VideoCapture(VIDEO_PATH)
     else:
-        cap = cv2.VideoCapture(0)
+        print(f"No video source selected (Webcam disabled and VIDEO_PATH is None). Attempting webcam {webcam_index} as fallback.")
+        cap = cv2.VideoCapture(webcam_index)
 
     if not cap.isOpened():
         print("Error: Could not open video source.")
+        if bridge:
+            bridge.stop()
         return
 
     current_speed = 0 
@@ -277,6 +316,17 @@ def main():
     # Track previous state for Teleport Check
     prev_l_bot = 0
     prev_r_bot = 0
+    
+    # Breadcrumb Logging Setup
+    last_log_time = 0
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    breadcrumb_filename = f"route_breadcrumbs_{timestamp_str}.csv"
+    
+    # Write header if file doesn't exist yet
+    if USE_SENSORS and not os.path.exists(breadcrumb_filename):
+        with open(breadcrumb_filename, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate"])
 
     while True:
         ret, frame = cap.read()
@@ -314,11 +364,34 @@ def main():
         # Get Sensor Data
         yaw_rate = 0.0
         current_speed = 0
+        lat, lng = 0.0, 0.0
         
         if bridge and USE_SENSORS:
             sensor_data = bridge.get_latest_data()
             yaw_rate = sensor_data['yaw']
-            current_speed = int(sensor_data['spd'])
+            current_speed = int(sensor_data.get('spd', 0))
+            lat = sensor_data.get('lat', 0.0)
+            lng = sensor_data.get('lng', 0.0)
+            
+            # --- Continuous Breadcrumb Logging (1Hz) ---
+            current_time_sec = time.time()
+            if current_time_sec - last_log_time >= 1.0:
+                # Log even if 0.0 if you want the full path, but usually 
+                # we wait for a valid GPS lock (lat != 0.0 or lng != 0.0)
+                if lat != 0.0 or lng != 0.0:
+                    try:
+                        with open(breadcrumb_filename, "a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                lat, 
+                                lng, 
+                                current_speed, 
+                                yaw_rate
+                            ])
+                        last_log_time = current_time_sec
+                    except Exception as e:
+                        print(f"Failed to write breadcrumb: {e}")
         
         # Calculate search offset based on yaw (Biasing the sliding window)
         search_bias = int(yaw_rate * 200)
@@ -349,7 +422,8 @@ def main():
 
         # --- UPDATE TRACKER ---
         # Pass pixel bases for internal fusion & smoothing
-        l_bottom, r_bottom, vp_coord, left_angle, right_angle, lat_vel = tracker.update(lines, width, height, pixel_bases=(l_base, r_base), yaw_rate=yaw_rate)
+        l_bottom, r_bottom, vp_coord, left_angle, right_angle, lat_vel = tracker.update(
+            lines, width, height, pixel_bases=(l_base, r_base), yaw_rate=yaw_rate, current_speed=current_speed)
         
         # 2. Teleport Check (Physics Impossibility)
         # Check if lane jumped > 100px in one frame (0.03s)

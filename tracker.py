@@ -33,7 +33,36 @@ class LaneTracker:
         self.curve_history = deque(maxlen=15) # Keep for curve smoothing as it's a derived value
         self.lane_width_history = deque(maxlen=50) # Keep for width logic
 
-    def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0):
+    def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0, current_speed=0.0):
+        # DYNAMIC TUNING BASED ON SPEED
+        base_q = 0.005 # Base process noise
+        base_r = 200.0 # Base measurement noise
+        
+        speed_factor = 1.0
+        if current_speed < 5.0:
+            # Idle/Very slow: We are not moving much, trust model heavily (freeze lane)
+            # Increase measurement noise so jittery readings don't throw it off
+            self.kf_left.Q[0, 0] = base_q * 0.1
+            self.kf_right.Q[0, 0] = base_q * 0.1
+            self.kf_vp_x.Q[0, 0] = base_q * 0.1
+            
+            self.kf_left.R[0, 0] = base_r * 5.0
+            self.kf_right.R[0, 0] = base_r * 5.0
+            self.kf_vp_x.R[0, 0] = base_r * 5.0
+            
+            # Reduce yaw influence because stationary turning (e.g., bumps/shakes) 
+            # shouldn't aggressively shift the lane AR
+            speed_factor = 0.1
+        else:
+            # Normal driving: Use base tuning
+            self.kf_left.Q[0, 0] = base_q
+            self.kf_right.Q[0, 0] = base_q
+            self.kf_vp_x.Q[0, 0] = base_q
+            
+            self.kf_left.R[0, 0] = base_r
+            self.kf_right.R[0, 0] = base_r
+            self.kf_vp_x.R[0, 0] = base_r
+    
         # PREDICTION STEP (Physics)
         self.kf_left.predict()
         self.kf_right.predict()
@@ -45,7 +74,7 @@ class LaneTracker:
         # CONTROL INPUT (Yaw Rate)
         # Shift expectations based on car turning. 
         # If we turn Left (+yaw), objects move Right on screen (-x).
-        yaw_shift = int(yaw_rate * 300) 
+        yaw_shift = int(yaw_rate * 300 * speed_factor) 
         
         # Direct modification of State Position (External Force)
         self.kf_left.x[0, 0] -= yaw_shift

@@ -3,6 +3,7 @@ import numpy as np
 import time
 import os
 import csv
+import math
 from datetime import datetime
 from tracker import LaneTracker, LANE_WIDTH_PX
 from sensor_bridge import SensorBridge
@@ -106,7 +107,7 @@ def find_lane_boundaries(binary_lane_img, search_offset=0):
 last_status = "Straight"
 status_counter = 0
 
-def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_rate=0.0, speed=0):
+def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_rate=0.0, speed=0, gps_curvature=0.0):
     """
     Decides turning based on relative position of VP vs Lane Center.
     Uses lateral velocity to detect lane changes and fuses IMU yaw_rate for Active Maneuvers.
@@ -137,20 +138,22 @@ def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_r
     # --- SENSOR FUSION LOGIC ---
     global USE_SENSORS
     if USE_SENSORS:
-        if yaw_rate > 25.0:
-            current_status = "Sharp Left"
-        elif yaw_rate > 11.0:
-            current_status = "Curve Left"
-        elif yaw_rate > 5.0:
-            current_status = "Mild Curve Left"
-        elif yaw_rate < -25.0:
-            current_status = "Sharp Right"
-        elif yaw_rate < -11.0:
-            current_status = "Curve Right"
-        elif yaw_rate < -5.0:
-            current_status = "Mild Curve Right"
-        else:
+        abs_yaw = abs(yaw_rate)
+        direction = "Left" if yaw_rate > 0 else "Right"
+        
+        # Fuse IMU Yaw and GPS Curvature
+        if abs_yaw < 2.0 and gps_curvature < 0.001:
             current_status = "Straight"
+        elif abs_yaw < 10.0 and gps_curvature < 0.005:
+            current_status = f"Mild Curve {direction}"
+        elif abs_yaw < 20.0:
+            current_status = f"Curve {direction}"
+        else:
+            current_status = f"Sharp {direction}"
+            
+            # Safety Warning Logic
+            if speed > 60: # High speed threshold
+                print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {abs_yaw:.1f}, GPS Curv: {gps_curvature:.4f})")
         
     # Hysteresis
     if current_status != last_status:
@@ -329,6 +332,9 @@ def main():
     prev_l_bot = 0
     prev_r_bot = 0
     
+    # GPS Trajectory tracking
+    gps_buffer = []
+    
     # Breadcrumb Logging Setup
     last_log_time = 0
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -338,7 +344,7 @@ def main():
     if USE_SENSORS and not os.path.exists(breadcrumb_filename):
         with open(breadcrumb_filename, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate"])
+            writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
 
     while True:
         ret, frame = cap.read()
@@ -377,6 +383,7 @@ def main():
         yaw_rate = 0.0
         current_speed = 0
         lat, lng = 0.0, 0.0
+        gps_curvature = 0.0
         
         if bridge and USE_SENSORS:
             sensor_data = bridge.get_latest_data()
@@ -385,25 +392,52 @@ def main():
             lat = sensor_data.get('lat', 0.0)
             lng = sensor_data.get('lng', 0.0)
             
-            # --- Continuous Breadcrumb Logging (1Hz) ---
-            current_time_sec = time.time()
-            if current_time_sec - last_log_time >= 1.0:
-                # Log even if 0.0 if you want the full path, but usually 
-                # we wait for a valid GPS lock (lat != 0.0 or lng != 0.0)
-                if lat != 0.0 or lng != 0.0:
-                    try:
-                        with open(breadcrumb_filename, "a", newline="") as f:
-                            writer = csv.writer(f)
-                            writer.writerow([
-                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                lat, 
-                                lng, 
-                                current_speed, 
-                                yaw_rate
-                            ])
-                        last_log_time = current_time_sec
-                    except Exception as e:
-                        print(f"Failed to write breadcrumb: {e}")
+            # NEO-6M Noise Mitigation: Filter stationary drift and small jumps
+            if lat != 0.0 and lng != 0.0:
+                add_to_buffer = False
+                
+                # Only buffer points if we are moving significantly (filtering 0-5 km/h false speed)
+                if current_speed >= 5: 
+                    if not gps_buffer:
+                        add_to_buffer = True
+                    else:
+                        last_lat, last_lng = gps_buffer[-1]
+                        # Compute literal distance in meters from the last buffered point
+                        dx = (lng - last_lng) * 111320 * math.cos(math.radians((lat + last_lat) / 2))
+                        dy = (lat - last_lat) * 110540
+                        dist_to_last = math.sqrt(dx**2 + dy**2)
+                        
+                        # Only accept points at least 5 meters apart to avoid high localized curvature from jitter
+                        if dist_to_last >= 5.0:
+                            add_to_buffer = True
+
+                if add_to_buffer:
+                    gps_buffer.append((lat, lng))
+                    if len(gps_buffer) > 3:
+                        gps_buffer.pop(0)
+
+            # Only calculate trajectory curvature if we have 3 solid points and actually moving
+            if len(gps_buffer) == 3 and current_speed >= 5:
+                lat1, lon1 = gps_buffer[0]
+                lat2, lon2 = gps_buffer[1]
+                lat3, lon3 = gps_buffer[2]
+
+                x1 = lon1 * 111320 * math.cos(math.radians(lat1))
+                y1 = lat1 * 110540
+                x2 = lon2 * 111320 * math.cos(math.radians(lat2))
+                y2 = lat2 * 110540
+                x3 = lon3 * 111320 * math.cos(math.radians(lat3))
+                y3 = lat3 * 110540
+
+                heading1 = math.degrees(math.atan2(y2 - y1, x2 - x1))
+                heading2 = math.degrees(math.atan2(y3 - y2, x3 - x2))
+
+                delta_heading = heading2 - heading1
+                delta_heading = (delta_heading + 180) % 360 - 180
+
+                distance = math.sqrt((x3 - x2)**2 + (y3 - y2)**2)
+                if distance > 0:
+                    gps_curvature = abs(delta_heading) / distance
         
         # Calculate search offset based on yaw (Biasing the sliding window)
         search_bias = int(yaw_rate * 200)
@@ -463,8 +497,28 @@ def main():
         
         # 1. Calc Status (Fixed Signature)
         # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate
-        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate=yaw_rate, speed=current_speed)
+        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate=yaw_rate, speed=current_speed, gps_curvature=gps_curvature)
         
+        # --- Continuous Breadcrumb Logging (1Hz) ---
+        if bridge and USE_SENSORS:
+            current_time_sec = time.time()
+            if current_time_sec - last_log_time >= 1.0:
+                if lat != 0.0 or lng != 0.0:
+                    try:
+                        with open(breadcrumb_filename, "a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                lat, 
+                                lng, 
+                                current_speed, 
+                                yaw_rate,
+                                status
+                            ])
+                        last_log_time = current_time_sec
+                    except Exception as e:
+                        print(f"Failed to write breadcrumb: {e}")
+
         # Smooth the curve value (offset)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
         

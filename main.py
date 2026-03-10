@@ -8,6 +8,7 @@ from datetime import datetime
 from tracker import LaneTracker, LANE_WIDTH_PX
 from sensor_bridge import SensorBridge
 from start_screen import StartScreen
+from gps_utils import GPSCurvatureEstimator
 
 
 # --- CONFIGURATION ---
@@ -103,77 +104,14 @@ def find_lane_boundaries(binary_lane_img, search_offset=0):
 
 # --- LOGIC & VISUALIZATION ---
 
-# Hysteresis state
-last_status = "Straight"
-status_counter = 0
-
-def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_rate=0.0, speed=0, gps_curvature=0.0):
+def generate_cubic_bezier_points(p0, p1, p2, p3, num_points=20, cutoff=0.9):
     """
-    Decides turning based on relative position of VP vs Lane Center.
-    Uses lateral velocity to detect lane changes and fuses IMU yaw_rate for Active Maneuvers.
-    """
-    global last_status, status_counter
-    
-    # 1. Lane Change Detection
-    # If the lanes are sliding sideways fast (e.g. > 1.5 px/frame), it's a lane change.
-    if abs(lateral_velocity) > 1.5:
-        # Reset curve status to straight during merge so we don't show confusing arrows
-        return "Straight", 0
-    
-    # VP is smoothed, so this is more stable than raw line angles
-    offset = vp_x - lane_center_x
-    
-    # Dynamic Thresholds
-    dead_zone = int(lane_width_px * 0.05) # 5%
-    mild_zone = int(lane_width_px * 0.20) # 20% (reduced slightly)
-    
-    current_status = "Straight"
-    
-    # Logic: Change #5 Fixed Logic (VP Right = Curve Left)
-    if offset > dead_zone:
-        current_status = "Curve Left" if offset < mild_zone else "Sharp Left"
-    elif offset < -dead_zone:
-        current_status = "Curve Right" if offset > -mild_zone else "Sharp Right"
-
-    # --- SENSOR FUSION LOGIC ---
-    global USE_SENSORS
-    if USE_SENSORS:
-        abs_yaw = abs(yaw_rate)
-        direction = "Left" if yaw_rate > 0 else "Right"
-        
-        # Fuse IMU Yaw and GPS Curvature
-        if abs_yaw < 5.0 and gps_curvature < 0.001:
-            current_status = "Straight"
-        elif abs_yaw < 12.0 and gps_curvature < 0.005:
-            current_status = f"Mild Curve {direction}"
-        elif abs_yaw < 22.0:
-            current_status = f"Curve {direction}"
-        else:
-            current_status = f"Sharp {direction}"
-            
-            # Safety Warning Logic
-            if speed > 60: # High speed threshold
-                print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {abs_yaw:.1f}, GPS Curv: {gps_curvature:.4f})")
-        
-    # Hysteresis
-    if current_status != last_status:
-        status_counter += 1
-        if status_counter > 3: 
-            last_status = current_status
-            status_counter = 0
-    else:
-        status_counter = 0
-        
-    return last_status, offset
-
-def generate_bezier_points(p0, p1, p2, num_points=20, cutoff=0.9):
-    """
-    Generates points for a Quadratic Bezier curve.
-    cutoff: Stop at this percentage of the curve (0.9 = 90% to VP)
+    Generates points for a Cubic Bezier curve (4 points).
+    This creates a 'whip' effect where the base stays straight and the top bends.
     """
     t = np.linspace(0, cutoff, num_points)
-    x = ((1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]).astype(int)
-    y = ((1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]).astype(int)
+    x = ((1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]).astype(int)
+    y = ((1-t)**3 * p0[1] + 3*(1-t)**2 * t * p1[1] + 3*(1-t) * t**2 * p2[1] + t**3 * p3[1]).astype(int)
     return list(zip(x, y))
 
 # Professional ADAS-style Display
@@ -237,6 +175,11 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
     # "km/h" label next to it
     cv2.putText(image, "km/h", (text_x + text_size[0] + 10, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
 
+    # Output Optimal Speed limit to the HUD
+    opt_text = f"TARGET: {optimal_speed} km/h"
+    opt_size = cv2.getTextSize(opt_text, font, 0.6, 1)[0]
+    cv2.putText(image, opt_text, (center_x - (opt_size[0] // 2), hud_y - 80), font, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
+
     # B. Status / Curve Warning (Below Speed)
     if status != "Straight":
         status_text = status.upper()
@@ -265,7 +208,7 @@ def main():
     # Attempt to initialize Sensor Bridge early for calibration
     bridge = None
     try:
-        bridge = SensorBridge(port='COM6', baud=115200) # Adjust COM port as needed
+        bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
         bridge.start()
         time.sleep(1) # Wait for connection
     except Exception as e:
@@ -324,6 +267,7 @@ def main():
     
     # Initialize Tracker locally
     tracker = LaneTracker()
+    gps_estimator = GPSCurvatureEstimator()
     
     consecutive_lost_frames = 0
     tracker_initialized = False # To ignore first-frame jump
@@ -332,19 +276,19 @@ def main():
     prev_l_bot = 0
     prev_r_bot = 0
     
-    # GPS Trajectory tracking
-    gps_buffer = []
-    
     # Breadcrumb Logging Setup
     last_log_time = 0
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     breadcrumb_filename = f"route_breadcrumbs_{timestamp_str}.csv"
+    breadcrumb_file = None
+    crumb_writer = None
     
     # Write header if file doesn't exist yet
-    if USE_SENSORS and not os.path.exists(breadcrumb_filename):
-        with open(breadcrumb_filename, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
+    if USE_SENSORS:
+        breadcrumb_file = open(breadcrumb_filename, "a", newline="")
+        crumb_writer = csv.writer(breadcrumb_file)
+        if not os.path.getsize(breadcrumb_filename):
+            crumb_writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
 
     while True:
         ret, frame = cap.read()
@@ -352,6 +296,22 @@ def main():
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
         
+        # Crop to target aspect ratio before resizing to avoid stretching
+        orig_h, orig_w = frame.shape[:2]
+        target_ar = DISPLAY_WIDTH / DISPLAY_HEIGHT
+        orig_ar = orig_w / orig_h
+        
+        if orig_ar > target_ar:
+            # Crop width
+            new_w = int(orig_h * target_ar)
+            start_x = (orig_w - new_w) // 2
+            frame = frame[:, start_x:start_x+new_w]
+        elif orig_ar < target_ar:
+            # Crop height
+            new_h = int(orig_w / target_ar)
+            start_y = (orig_h - new_h) // 2
+            frame = frame[start_y:start_y+new_h, :]
+            
         # Resize frame to display dimensions
         frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
         
@@ -359,9 +319,10 @@ def main():
         PROC_WIDTH, PROC_HEIGHT = 640, 360
         proc_frame = cv2.resize(frame, (PROC_WIDTH, PROC_HEIGHT))
         
-        gray = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blur, 50, 150)
+        # Apply blur to color image to benefit both HLS and Gray pipelines
+        proc_frame_blurred = cv2.GaussianBlur(proc_frame, (5, 5), 0)
+        gray = cv2.cvtColor(proc_frame_blurred, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
         
         # Dynamic ROI: Focus where the tracker thinks the road is (scaled)
         current_vp_x_proc = int(tracker.avg_vp[0] * PROC_WIDTH / DISPLAY_WIDTH)
@@ -392,59 +353,14 @@ def main():
             lat = sensor_data.get('lat', 0.0)
             lng = sensor_data.get('lng', 0.0)
             
-            # NEO-6M Noise Mitigation: Filter stationary drift and small jumps
-            if lat != 0.0 and lng != 0.0:
-                add_to_buffer = False
-                
-                # Only buffer points if we are moving significantly (filtering 0-5 km/h false speed)
-                if current_speed >= 5: 
-                    if not gps_buffer:
-                        add_to_buffer = True
-                    else:
-                        last_lat, last_lng = gps_buffer[-1]
-                        # Compute literal distance in meters from the last buffered point
-                        dx = (lng - last_lng) * 111320 * math.cos(math.radians((lat + last_lat) / 2))
-                        dy = (lat - last_lat) * 110540
-                        dist_to_last = math.sqrt(dx**2 + dy**2)
-                        
-                        # Only accept points at least 5 meters apart to avoid high localized curvature from jitter
-                        if dist_to_last >= 5.0:
-                            add_to_buffer = True
-
-                if add_to_buffer:
-                    gps_buffer.append((lat, lng))
-                    if len(gps_buffer) > 3:
-                        gps_buffer.pop(0)
-
-            # Only calculate trajectory curvature if we have 3 solid points and actually moving
-            if len(gps_buffer) == 3 and current_speed >= 5:
-                lat1, lon1 = gps_buffer[0]
-                lat2, lon2 = gps_buffer[1]
-                lat3, lon3 = gps_buffer[2]
-
-                x1 = lon1 * 111320 * math.cos(math.radians(lat1))
-                y1 = lat1 * 110540
-                x2 = lon2 * 111320 * math.cos(math.radians(lat2))
-                y2 = lat2 * 110540
-                x3 = lon3 * 111320 * math.cos(math.radians(lat3))
-                y3 = lat3 * 110540
-
-                heading1 = math.degrees(math.atan2(y2 - y1, x2 - x1))
-                heading2 = math.degrees(math.atan2(y3 - y2, x3 - x2))
-
-                delta_heading = heading2 - heading1
-                delta_heading = (delta_heading + 180) % 360 - 180
-
-                distance = math.sqrt((x3 - x2)**2 + (y3 - y2)**2)
-                if distance > 0:
-                    gps_curvature = abs(delta_heading) / distance
+            gps_curvature = gps_estimator.update(lat, lng, current_speed)
         
         # Calculate search offset based on yaw (Biasing the sliding window)
-        search_bias = int(yaw_rate * 200)
+        search_bias = int(yaw_rate * 5)
 
         # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
         # 1. Pixel-based detection (Raw) - use proc_frame & precomputed gray
-        binary_lane = detect_lane_pixels(proc_frame, gray=gray)
+        binary_lane = detect_lane_pixels(proc_frame_blurred, gray=gray)
         l_base_proc, r_base_proc = find_lane_boundaries(binary_lane, search_offset=search_bias//2)
         
         # Scale bases back to display dimensions
@@ -497,24 +413,23 @@ def main():
         
         # 1. Calc Status (Fixed Signature)
         # Passing CORRECT arguments: vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate
-        status, raw_curve_val = get_curve_status(vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate=yaw_rate, speed=current_speed, gps_curvature=gps_curvature)
+        status, raw_curve_val = tracker.get_curve_status(vp_x, lane_center_x, current_lane_width, lat_vel, yaw_rate=yaw_rate, speed=current_speed, gps_curvature=gps_curvature, use_sensors=USE_SENSORS)
         
         # --- Continuous Breadcrumb Logging (1Hz) ---
-        if bridge and USE_SENSORS:
+        if crumb_writer:
             current_time_sec = time.time()
             if current_time_sec - last_log_time >= 1.0:
                 if lat != 0.0 or lng != 0.0:
                     try:
-                        with open(breadcrumb_filename, "a", newline="") as f:
-                            writer = csv.writer(f)
-                            writer.writerow([
-                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                lat, 
-                                lng, 
-                                current_speed, 
-                                yaw_rate,
-                                status
-                            ])
+                        crumb_writer.writerow([
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                            lat, 
+                            lng, 
+                            current_speed, 
+                            yaw_rate,
+                            status
+                        ])
+                        breadcrumb_file.flush()
                         last_log_time = current_time_sec
                     except Exception as e:
                         print(f"Failed to write breadcrumb: {e}")
@@ -522,49 +437,53 @@ def main():
         # Smooth the curve value (offset)
         smoothed_curve_val = tracker.update_curve(raw_curve_val)
         
-        # 2. Optimal Speed
-        if "Sharp" in status: optimal_speed = 40
-        elif "Curve" in status: optimal_speed = 70
-        else: optimal_speed = 100
+        # 2. Optimal Speed Calculation
+        base_advisory = 100
+        if "Sharp" in status: base_advisory = 40
+        elif "Curve" in status: base_advisory = 70
+        
+        # Output a target speed that is safe but realistic to brake towards
+        optimal_speed = min(max(current_speed, 30), base_advisory)
 
         # 4. Draw MINIMALIST AR HUD
         
         # Smart Control Point Logic (Clamping)
         lane_half_width = current_lane_width // 2
-        max_shift = int(lane_half_width * 0.6) # Limit shift to 60% of half-width
+        max_shift = int(lane_half_width * 0.5) # Reduced maximum lateral shift
         
         if "Straight" in status:
             control_shift_x = 0
         else:
-            # Clamp the shift to prevent overshooting lane boundaries
-            raw_shift = int(smoothed_curve_val * 0.9)
+            # Clamp the shift to prevent overshooting lane boundaries (decreased threshold shift)
+            raw_shift = int(smoothed_curve_val * 0.5) 
             control_shift_x = int(np.clip(raw_shift, -max_shift, max_shift))
         
-        # Control Point Y (60% depth)
-        control_y = int(height - (height - vp_y) * 0.4) 
+        # --- THE PROGRESSIVE RIBBON TRANSFORMATION ---
         
-        # --- THE FLEXIBLE RIBBON TRANSFORMATION ---
+        # 1. Anchor the Left Path 
+        p0_l = (l_bottom, height) # Bottom Anchor
         
-        # 1. Anchor the Left Path as the primary 'truth'
-        p0_l = (l_bottom, height)
-        p2_l = (vp_x, vp_y)
-        p1_l = ((l_bottom + vp_x)//2 + control_shift_x, control_y)
+        # Control 1: Lower-Mid (Stays straight, pushes out 30% towards horizon)
+        p1_l = (int(l_bottom + (vp_x - l_bottom) * 0.3), int(height - (height - vp_y) * 0.3))
         
-        # 2. Derive the Right Path by using the tracked right lane but clamping it
-        # to ensure it adapts to road width, guided by SAFE_ROAD_WIDTH
+        # Control 2: Upper-Mid (Takes the hard curve shift, 70% towards horizon)
+        p2_l = (int(l_bottom + (vp_x - l_bottom) * 0.7) + control_shift_x, int(height - (height - vp_y) * 0.7))
+        
+        p3_l = (vp_x, vp_y) # Top Anchor
+        
+        # 2. Derive the Right Path using actual constraints
         actual_width = r_bottom - l_bottom
-        # Clamp width heavily between SAFE_ROAD_WIDTH-100 and SAFE_ROAD_WIDTH+100
-        safe_r_bottom = l_bottom + np.clip(actual_width, SAFE_ROAD_WIDTH - 100, SAFE_ROAD_WIDTH + 100)
+        # Trust actual width but enforce sane minimums/maximums, don't force a phantom wide lane
+        safe_r_bottom = l_bottom + np.clip(actual_width, 300, 1000)
         
         p0_r = (safe_r_bottom, height)
-        p2_r = (vp_x, vp_y) 
-        # Control point uses a similar logic for stable curves
-        safe_p1_x = int(p1_l[0] + (safe_r_bottom - l_bottom) // 2)
-        p1_r = (safe_p1_x, control_y)
+        p1_r = (int(safe_r_bottom + (vp_x - safe_r_bottom) * 0.3), int(height - (height - vp_y) * 0.3))
+        p2_r = (int(safe_r_bottom + (vp_x - safe_r_bottom) * 0.7) + control_shift_x, int(height - (height - vp_y) * 0.7))
+        p3_r = (vp_x, vp_y)
         
-        # Generate Points
-        left_curve_pts = generate_bezier_points(p0_l, p1_l, p2_l, 40)
-        right_curve_pts = generate_bezier_points(p0_r, p1_r, p2_r, 40)
+        # Generate Progressive Points
+        left_curve_pts = generate_cubic_bezier_points(p0_l, p1_l, p2_l, p3_l, 40)
+        right_curve_pts = generate_cubic_bezier_points(p0_r, p1_r, p2_r, p3_r, 40)
 
         draw_minimalist_hud(
             frame, 
@@ -583,6 +502,8 @@ def main():
         if key == ord('q'):
             break
             
+    if breadcrumb_file:
+        breadcrumb_file.close()
     if bridge:
         bridge.stop()
     cap.release()

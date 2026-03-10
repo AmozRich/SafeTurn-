@@ -58,6 +58,7 @@ class SensorBridge:
             except Exception as e:
                 print(f"Bridge Error: {e} - attempting reconnect...")
                 self.serial_conn = None
+                self.running = False
                 time.sleep(2)
                 self.start()
                 break

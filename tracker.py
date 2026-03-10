@@ -32,6 +32,10 @@ class LaneTracker:
 
         self.curve_history = deque(maxlen=15) # Keep for curve smoothing as it's a derived value
         self.lane_width_history = deque(maxlen=50) # Keep for width logic
+        
+        # Hysteresis state for curve categorization
+        self.last_status = "Straight"
+        self.status_counter = 0
 
     def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0, current_speed=0.0):
         # DYNAMIC TUNING BASED ON SPEED
@@ -235,3 +239,71 @@ class LaneTracker:
         self.curve_history.append(raw_curve_val)
         self.avg_curve = int(np.mean(self.curve_history))
         return self.avg_curve
+
+    def get_curve_status(self, vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_rate=0.0, speed=0, gps_curvature=0.0, use_sensors=False):
+        """
+        Decides turning based on relative position of VP vs Lane Center.
+        Uses lateral velocity to detect lane changes and fuses IMU yaw_rate for Active Maneuvers.
+        """
+        # 1. Lane Change Detection
+        if abs(lateral_velocity) > 1.5:
+            return "Straight", 0
+        
+        offset = vp_x - lane_center_x
+        
+        dead_zone = int(lane_width_px * 0.08)
+        mild_zone = int(lane_width_px * 0.25)
+        
+        current_status = "Straight"
+        
+        if offset > dead_zone:
+            current_status = "Curve Left" if offset < mild_zone else "Sharp Left"
+        elif offset < -dead_zone:
+            current_status = "Curve Right" if offset > -mild_zone else "Sharp Right"
+
+        # --- SENSOR FUSION LOGIC ---
+        if use_sensors:
+            abs_yaw = abs(yaw_rate)
+            direction = "Left" if yaw_rate > 0 else "Right"
+            
+            # IMU is the primary classifier (fast, reliable)
+            if abs_yaw < 5.0:
+                sensor_status = "Straight"
+            elif abs_yaw < 12.0:
+                sensor_status = f"Mild Curve {direction}"
+            elif abs_yaw < 22.0:
+                sensor_status = f"Curve {direction}"
+            else:
+                sensor_status = f"Sharp {direction}"
+                
+            # GPS curvature can only UPGRADE the status, never downgrade it
+            # This prevents GPS noise from softening a real curve
+            if gps_curvature > 0.008 and "Mild" in sensor_status:
+                sensor_status = f"Curve {direction}"
+            if gps_curvature > 0.02 and "Sharp" not in sensor_status:
+                sensor_status = f"Sharp {direction}"
+                
+            # Safety Warning Logic
+            if "Sharp" in sensor_status and speed > 60:
+                print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {abs_yaw:.1f})")
+            
+            # Fusion: Treat sensors as an equivalent or higher warning source
+            severity = {
+                "Straight": 0, 
+                "Mild Curve Left": 1, "Mild Curve Right": 1, 
+                "Curve Left": 2, "Curve Right": 2, 
+                "Sharp Left": 3, "Sharp Right": 3
+            }
+            if severity.get(sensor_status, 0) > severity.get(current_status, 0):
+                current_status = sensor_status
+            
+        # Hysteresis
+        if current_status != self.last_status:
+            self.status_counter += 1
+            if self.status_counter > 3: 
+                self.last_status = current_status
+                self.status_counter = 0
+        else:
+            self.status_counter = 0
+            
+        return self.last_status, offset

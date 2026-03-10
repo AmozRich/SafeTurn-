@@ -34,12 +34,13 @@ class KalmanFilter:
         # 6. Measurement Noise R (Uncertainty in the measurement)
         self.R = np.array([[measurement_noise]])
 
-    def predict(self):
+    def predict(self, dt=1.0):
         """
         Predict the next state based on the previous state and physics model.
         x = F * x
         P = F * P * F.T + Q
         """
+        self.F[0, 1] = dt
         self.x = np.dot(self.F, self.x)
         self.P = np.dot(np.dot(self.F, self.P), self.F.T) + self.Q
         return self.x[0, 0]
@@ -69,9 +70,10 @@ class KalmanFilter:
         # Update State
         self.x = self.x + np.dot(K, y)
         
-        # Update Covariance
+        # Update Covariance (Joseph Form for numerical stability)
         I = np.eye(self.F.shape[0])
-        self.P = np.dot((I - np.dot(K, self.H)), self.P)
+        I_KH = (I - np.dot(K, self.H))
+        self.P = np.dot(np.dot(I_KH, self.P), I_KH.T) + np.dot(np.dot(K, self.R), K.T)
         
         return self.x[0, 0]
 

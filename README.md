@@ -12,7 +12,8 @@ SafeTurn+ is a sophisticated, real-time driver assistance system designed to mim
   - **🔵 Straight**: Path is clear, high safe speed.
   - **🟠 Curve Warning**: Approach with caution.
   - **🔴 Sharp Curve/Active Maneuver**: DANGER, brake required immediately.
-- **🎮 Gamified Projection**: Draws "Forza-style" Bezier curves on the road, adjusting dynamically to the optimal driving path.
+- **🏎️ Dynamic AR Hud**: Uses 4-point **Cubic Bezier curves** to render a progressive "whip" effect on the HUD, anchoring the trajectory to the vehicle while organically bending into distant horizons.
+- **📺 Aspect Ratio Preservation**: Automatically center-crops and preserves native aspect ratios of video inputs and webcams to prevent geometric stretching during computer vision tracking.
 
 ## 🛠️ Architecture / Tech Stack
 

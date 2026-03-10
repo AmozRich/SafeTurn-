@@ -197,7 +197,8 @@ class LaneTracker:
              self.kf_right.update(curr_right_bot)
 
         # Retrieve Smoothed States
-        self.avg_vp = (int(self.kf_vp_x.get_position()), int(self.kf_vp_y.get_position()))
+        # Horizon locked perfectly to the center of the screen
+        self.avg_vp = (frame_width // 2, frame_height // 2)
         self.avg_left_angle = self.kf_left_angle.get_position()
         self.avg_right_angle = self.kf_right_angle.get_position()
         self.avg_left_bottom = int(self.kf_left.get_position())

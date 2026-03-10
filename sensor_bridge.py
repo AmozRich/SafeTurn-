@@ -4,7 +4,7 @@ import json
 import time
 
 class SensorBridge:
-    def __init__(self, port='COM10', baud=115200):
+    def __init__(self, port='COM6', baud=115200):
         self.port = port
         self.baud = baud
         self.running = False

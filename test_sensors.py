@@ -6,7 +6,7 @@ from datetime import datetime
 from sensor_bridge import SensorBridge
 
 # Change this to your actual COM port (e.g., 'COM3' on Windows, '/dev/ttyUSB0' on Linux/Mac)
-PORT = 'COM10'
+PORT = 'COM6'
 BAUD = 115200
 
 def test_sensors():
@@ -92,11 +92,11 @@ def test_sensors():
             current_status = "Straight"
             
             # Fuse IMU Yaw and GPS Curvature
-            if abs_yaw < 2.0 and gps_curvature < 0.001:
+            if abs_yaw < 5.0 and gps_curvature < 0.001:
                 current_status = "Straight"
-            elif abs_yaw < 10.0 and gps_curvature < 0.005:
+            elif abs_yaw < 12.0 and gps_curvature < 0.005:
                 current_status = f"Mild Curve {direction}"
-            elif abs_yaw < 20.0:
+            elif abs_yaw < 22.0:
                 current_status = f"Curve {direction}"
             else:
                 current_status = f"Sharp {direction}"

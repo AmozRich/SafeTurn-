@@ -142,11 +142,11 @@ def get_curve_status(vp_x, lane_center_x, lane_width_px, lateral_velocity, yaw_r
         direction = "Left" if yaw_rate > 0 else "Right"
         
         # Fuse IMU Yaw and GPS Curvature
-        if abs_yaw < 2.0 and gps_curvature < 0.001:
+        if abs_yaw < 5.0 and gps_curvature < 0.001:
             current_status = "Straight"
-        elif abs_yaw < 10.0 and gps_curvature < 0.005:
+        elif abs_yaw < 12.0 and gps_curvature < 0.005:
             current_status = f"Mild Curve {direction}"
-        elif abs_yaw < 20.0:
+        elif abs_yaw < 22.0:
             current_status = f"Curve {direction}"
         else:
             current_status = f"Sharp {direction}"
@@ -265,7 +265,7 @@ def main():
     # Attempt to initialize Sensor Bridge early for calibration
     bridge = None
     try:
-        bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
+        bridge = SensorBridge(port='COM6', baud=115200) # Adjust COM port as needed
         bridge.start()
         time.sleep(1) # Wait for connection
     except Exception as e:

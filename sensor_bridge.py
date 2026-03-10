@@ -22,25 +22,35 @@ class SensorBridge:
         self.thread = None
         self.serial_conn = None
 
+    @property
+    def is_connected(self):
+        return self.serial_conn is not None and self.serial_conn.is_open
+
     def start(self):
-        try:
-            self.serial_conn = serial.Serial(self.port, self.baud, timeout=1)
-            self.running = True
-            self.thread = threading.Thread(target=self._update_loop, daemon=True)
-            self.thread.start()
-            print(f"SensorBridge started on {self.port}")
-        except Exception as e:
-            print(f"Failed to start SensorBridge: {e}")
+        if self.running: return
+        self.running = True
+        self.thread = threading.Thread(target=self._update_loop, daemon=True)
+        self.thread.start()
+        print(f"SensorBridge thread started. Awaiting connection on {self.port}")
 
     def stop(self):
         self.running = False
         if self.thread:
-            self.thread.join()
+            self.thread.join(timeout=1.0)
         if self.serial_conn:
             self.serial_conn.close()
 
     def _update_loop(self):
-        while self.running and self.serial_conn:
+        while self.running:
+            if not self.is_connected:
+                try:
+                    self.serial_conn = serial.Serial(self.port, self.baud, timeout=1)
+                    print(f"SensorBridge connected on {self.port}")
+                except Exception as e:
+                    print(f"Bridge reconnect failed: {e}. Retrying in 2s...")
+                    time.sleep(2)
+                    continue
+
             try:
                 if self.serial_conn.in_waiting:
                     line = self.serial_conn.readline().decode('utf-8').strip()
@@ -56,12 +66,14 @@ class SensorBridge:
                         except json.JSONDecodeError:
                             pass # Corrupt packet
             except Exception as e:
-                print(f"Bridge Error: {e} - attempting reconnect...")
+                print(f"Bridge Error: {e} - connection lost.")
+                if self.serial_conn:
+                    try:
+                        self.serial_conn.close()
+                    except:
+                        pass
                 self.serial_conn = None
-                self.running = False
                 time.sleep(2)
-                self.start()
-                break
 
     def calibrate(self, duration=2.0):
         print(f"Starting sensor calibration for {duration} seconds...")

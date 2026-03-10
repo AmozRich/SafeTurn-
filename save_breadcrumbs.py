@@ -4,7 +4,7 @@ import csv
 import os
 from datetime import datetime
 from sensor_bridge import SensorBridge
-from gps_utils import GPSCurvatureEstimator
+from gps_utils import GPSCurvatureEstimator, classify_curve
 
 # --- CONFIGURATION ---
 SERIAL_PORT = 'COM10'  # Replace with the ESP32's COM port
@@ -42,25 +42,7 @@ def log_breadcrumbs():
             gps_curvature = gps_estimator.update(lat, lng, current_speed)
                     
             # --- SENSOR FUSION LOGIC ---
-            abs_yaw = abs(yaw_rate)
-            direction = "Left" if yaw_rate > 0 else "Right"
-            
-            # IMU is the primary classifier (fast, reliable)
-            if abs_yaw < 5.0:
-                current_status = "Straight"
-            elif abs_yaw < 12.0:
-                current_status = f"Mild Curve {direction}"
-            elif abs_yaw < 22.0:
-                current_status = f"Curve {direction}"
-            else:
-                current_status = f"Sharp {direction}"
-                
-            # GPS curvature can only UPGRADE the status, never downgrade it
-            # This prevents GPS noise from softening a real curve
-            if gps_curvature > 0.008 and "Mild" in current_status:
-                current_status = f"Curve {direction}"
-            if gps_curvature > 0.02 and "Sharp" not in current_status:
-                current_status = f"Sharp {direction}"
+            current_status = classify_curve(yaw_rate, gps_curvature)
             
             # Write breadcrumb (1Hz logging to match main.py)
             writer.writerow([

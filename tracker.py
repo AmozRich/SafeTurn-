@@ -1,6 +1,7 @@
 import numpy as np
 from collections import deque
 from kalman_filter import KalmanFilter
+from gps_utils import classify_curve
 
 # --- CONFIGURATION ---
 LANE_WIDTH_PX = 600 # Approx lane width at bottom of screen
@@ -37,7 +38,7 @@ class LaneTracker:
         self.last_status = "Straight"
         self.status_counter = 0
 
-    def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0, current_speed=0.0):
+    def update(self, lines, frame_width, frame_height, pixel_bases=None, yaw_rate=0.0, current_speed=0.0, dt=1.0):
         # DYNAMIC TUNING BASED ON SPEED
         base_q = 0.005 # Base process noise
         base_r = 200.0 # Base measurement noise
@@ -68,17 +69,17 @@ class LaneTracker:
             self.kf_vp_x.R[0, 0] = base_r
     
         # PREDICTION STEP (Physics)
-        self.kf_left.predict()
-        self.kf_right.predict()
-        self.kf_vp_x.predict()
-        self.kf_vp_y.predict()
-        self.kf_left_angle.predict()
-        self.kf_right_angle.predict()
+        self.kf_left.predict(dt)
+        self.kf_right.predict(dt)
+        self.kf_vp_x.predict(dt)
+        self.kf_vp_y.predict(dt)
+        self.kf_left_angle.predict(dt)
+        self.kf_right_angle.predict(dt)
 
         # CONTROL INPUT (Yaw Rate)
         # Shift expectations based on car turning. 
         # If we turn Left (+yaw), objects move Right on screen (-x).
-        yaw_shift = int(yaw_rate * 300 * speed_factor) 
+        yaw_shift = int(yaw_rate * 10 * speed_factor) 
         
         # Direct modification of State Position (External Force)
         self.kf_left.x[0, 0] -= yaw_shift
@@ -263,39 +264,24 @@ class LaneTracker:
 
         # --- SENSOR FUSION LOGIC ---
         if use_sensors:
-            abs_yaw = abs(yaw_rate)
-            direction = "Left" if yaw_rate > 0 else "Right"
+            sensor_status = classify_curve(yaw_rate, gps_curvature)
             
-            # IMU is the primary classifier (fast, reliable)
-            if abs_yaw < 5.0:
-                sensor_status = "Straight"
-            elif abs_yaw < 12.0:
-                sensor_status = f"Mild Curve {direction}"
-            elif abs_yaw < 22.0:
-                sensor_status = f"Curve {direction}"
-            else:
-                sensor_status = f"Sharp {direction}"
-                
-            # GPS curvature can only UPGRADE the status, never downgrade it
-            # This prevents GPS noise from softening a real curve
-            if gps_curvature > 0.008 and "Mild" in sensor_status:
-                sensor_status = f"Curve {direction}"
-            if gps_curvature > 0.02 and "Sharp" not in sensor_status:
-                sensor_status = f"Sharp {direction}"
-                
             # Safety Warning Logic
             if "Sharp" in sensor_status and speed > 60:
-                print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {abs_yaw:.1f})")
+                print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {yaw_rate:.1f})")
             
-            # Fusion: Treat sensors as an equivalent or higher warning source
+            # Fusion: Sensor is the base when available, Vision can only escalate
+            vision_status = current_status
+            current_status = sensor_status
+            
             severity = {
                 "Straight": 0, 
                 "Mild Curve Left": 1, "Mild Curve Right": 1, 
                 "Curve Left": 2, "Curve Right": 2, 
                 "Sharp Left": 3, "Sharp Right": 3
             }
-            if severity.get(sensor_status, 0) > severity.get(current_status, 0):
-                current_status = sensor_status
+            if severity.get(vision_status, 0) > severity.get(current_status, 0):
+                current_status = vision_status
             
         # Hysteresis
         if current_status != self.last_status:

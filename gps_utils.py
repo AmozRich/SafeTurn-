@@ -49,3 +49,25 @@ class GPSCurvatureEstimator:
                     radius = distance / (2 * math.sin(rad_delta / 2))
                     return 1.0 / radius
         return 0.0
+
+def classify_curve(yaw_rate, gps_curvature):
+    abs_yaw = abs(yaw_rate)
+    direction = "Left" if yaw_rate > 0 else "Right"
+    
+    # IMU is the primary classifier (fast, reliable)
+    if abs_yaw < 5.0:
+        status = "Straight"
+    elif abs_yaw < 12.0:
+        status = f"Mild Curve {direction}"
+    elif abs_yaw < 22.0:
+        status = f"Curve {direction}"
+    else:
+        status = f"Sharp {direction}"
+        
+    # GPS curvature can only UPGRADE the status, never downgrade it
+    if gps_curvature > 0.008 and "Mild" in status:
+        status = f"Curve {direction}"
+    if gps_curvature > 0.02 and "Sharp" not in status:
+        status = f"Sharp {direction}"
+        
+    return status

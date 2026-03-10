@@ -130,7 +130,8 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
     # A. The Subtle Fill (Very transparent)
     # We use a much lower alpha (0.2) so you can see potholes through it
     color_fill = (0, 255, 100) # Cyber Green
-    if "Curve" in status: color_fill = (0, 165, 255) # Amber
+    if "Mild" in status: color_fill = (0, 255, 255) # Yellow
+    elif "Curve" in status: color_fill = (0, 165, 255) # Amber
     if "Sharp" in status: color_fill = (0, 0, 255)   # Red
     
     cv2.fillPoly(overlay, [np.array(poly_points, dtype=np.int32)], color_fill)
@@ -205,15 +206,9 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
 
 
 def main():
-    # Attempt to initialize Sensor Bridge early for calibration
-    bridge = None
-    try:
-        bridge = SensorBridge(port='COM10', baud=115200) # Adjust COM port as needed
-        bridge.start()
-        time.sleep(1) # Wait for connection
-    except Exception as e:
-        print(f"Sensor Warning: {e}")
-        bridge = None
+    # Pass an unstarted bridge so the UI can enable sensor checkboxes
+    # Connection logic runs asynchronously if requested later
+    bridge = SensorBridge(port='COM10', baud=115200)
 
     # Launch Start Screen
     screen = StartScreen(bridge=bridge)
@@ -231,9 +226,12 @@ def main():
     USE_WEBCAM = use_webcam
     
     # If user chose not to use sensors, shut down the bridge we span up for calib
-    if not USE_SENSORS and bridge:
-        bridge.stop()
+    if not USE_SENSORS:
         bridge = None
+    else:
+        print("Connecting to sensors...")
+        bridge.start()
+        time.sleep(0.5)
 
     if start_mode == "Pothole":
         import pothole_analysis
@@ -272,6 +270,8 @@ def main():
     consecutive_lost_frames = 0
     tracker_initialized = False # To ignore first-frame jump
     
+    last_frame_time = time.perf_counter()
+    
     # Track previous state for Teleport Check
     prev_l_bot = 0
     prev_r_bot = 0
@@ -285,16 +285,19 @@ def main():
     
     # Write header if file doesn't exist yet
     if USE_SENSORS:
-        breadcrumb_file = open(breadcrumb_filename, "a", newline="")
+        breadcrumb_file = open(breadcrumb_filename, "w", newline="")
         crumb_writer = csv.writer(breadcrumb_file)
-        if not os.path.getsize(breadcrumb_filename):
-            crumb_writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
+        crumb_writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
 
     while True:
         ret, frame = cap.read()
         if not ret: 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            continue
+            print("Video feed ended.")
+            break
+            
+        now = time.perf_counter()
+        dt = now - last_frame_time
+        last_frame_time = now
         
         # Crop to target aspect ratio before resizing to avoid stretching
         orig_h, orig_w = frame.shape[:2]
@@ -385,7 +388,7 @@ def main():
         # --- UPDATE TRACKER ---
         # Pass pixel bases for internal fusion & smoothing
         l_bottom, r_bottom, vp_coord, left_angle, right_angle, lat_vel = tracker.update(
-            lines, width, height, pixel_bases=(l_base, r_base), yaw_rate=yaw_rate, current_speed=current_speed)
+            lines, width, height, pixel_bases=(l_base, r_base), yaw_rate=yaw_rate, current_speed=current_speed, dt=dt)
         
         # 2. Teleport Check (Physics Impossibility)
         # Check if lane jumped > 100px in one frame (0.03s)
@@ -443,7 +446,7 @@ def main():
         elif "Curve" in status: base_advisory = 70
         
         # Output a target speed that is safe but realistic to brake towards
-        optimal_speed = min(max(current_speed, 30), base_advisory)
+        optimal_speed = min(max(current_speed, 30), base_advisory) if current_speed > 5 else 0
 
         # 4. Draw MINIMALIST AR HUD
         
@@ -457,6 +460,10 @@ def main():
             # Clamp the shift to prevent overshooting lane boundaries (decreased threshold shift)
             raw_shift = int(smoothed_curve_val * 0.5) 
             control_shift_x = int(np.clip(raw_shift, -max_shift, max_shift))
+        
+        # Ensure bases don't go wildly out of bounds from Kalman teleport bounces
+        l_bottom = int(np.clip(l_bottom, 0, DISPLAY_WIDTH - 1))
+        r_bottom = int(np.clip(r_bottom, 0, DISPLAY_WIDTH - 1))
         
         # --- THE PROGRESSIVE RIBBON TRANSFORMATION ---
         
@@ -475,6 +482,7 @@ def main():
         actual_width = r_bottom - l_bottom
         # Trust actual width but enforce sane minimums/maximums, don't force a phantom wide lane
         safe_r_bottom = l_bottom + np.clip(actual_width, 300, 1000)
+        safe_r_bottom = int(np.clip(safe_r_bottom, 0, DISPLAY_WIDTH - 1))
         
         p0_r = (safe_r_bottom, height)
         p1_r = (int(safe_r_bottom + (vp_x - safe_r_bottom) * 0.3), int(height - (height - vp_y) * 0.3))

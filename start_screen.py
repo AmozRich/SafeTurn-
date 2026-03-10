@@ -38,6 +38,7 @@ class StartScreen:
             options_frame, 
             text="Use Hardware Sensors", 
             variable=self.use_sensors,
+            command=self.on_sensor_toggle,
             font=("Helvetica", 12),
             bg="#2c3e50",
             fg="#ecf0f1",
@@ -124,6 +125,14 @@ class StartScreen:
             fg="#bdc3c7"
         )
         self.status_label.pack(side=tk.BOTTOM, pady=10)
+
+    def on_sensor_toggle(self):
+        if self.use_sensors.get() and self.bridge and not self.bridge.running:
+            self.bridge.start()
+            self.status_label.config(text="Connecting to sensors...")
+        elif not self.use_sensors.get() and self.bridge and self.bridge.running:
+            self.bridge.stop()
+            self.status_label.config(text="Hardware sensors disabled.")
 
     def calibrate_sensors(self):
         if not self.use_sensors.get() or not self.bridge:

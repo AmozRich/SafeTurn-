@@ -7,7 +7,7 @@ from sensor_bridge import SensorBridge
 from gps_utils import GPSCurvatureEstimator, classify_curve
 
 # Change this to your actual COM port (e.g., 'COM3' on Windows, '/dev/ttyUSB0' on Linux/Mac)
-PORT = 'COM6'
+PORT = 'COM10'
 BAUD = 115200
 
 def test_sensors():

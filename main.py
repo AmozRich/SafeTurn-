@@ -12,7 +12,7 @@ from gps_utils import GPSCurvatureEstimator
 
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "drive.mp4" # Set to None or "" to use the live webcam feed
+VIDEO_PATH = "video.mp4" # Set to None or "" to use the live webcam feed
 HISTORY_LENGTH = 10 
 USE_SENSORS = False # Overridden by UI 
 USE_WEBCAM = False # Overridden by UI 
@@ -67,7 +67,16 @@ def detect_lane_pixels(frame, gray=None):
     # Also use grayscale thresholding as backup
     if gray is None:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, gray_thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray_clahe = clahe.apply(gray)
+    
+    gray_thresh = cv2.adaptiveThreshold(gray_clahe, 255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, -5)
+        
+    # Morphological cleanup to remove speckled noise from adaptive thresholding
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    gray_thresh = cv2.morphologyEx(gray_thresh, cv2.MORPH_OPEN, kernel)
     
     # Combine masks: White OR Yellow OR Grayscale
     color_mask = cv2.bitwise_or(white_mask, yellow_mask)

@@ -7,7 +7,7 @@ from sensor_bridge import SensorBridge
 from gps_utils import GPSCurvatureEstimator, classify_curve
 
 # --- CONFIGURATION ---
-SERIAL_PORT = 'COM6'  # Replace with the ESP32's COM port
+SERIAL_PORT = 'COM10'  # Replace with the ESP32's COM port
 BAUD_RATE = 115200    # Must match Serial.begin() in ESP32 sketch
 # -------------------
 

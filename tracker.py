@@ -197,8 +197,8 @@ class LaneTracker:
              self.kf_right.update(curr_right_bot)
 
         # Retrieve Smoothed States
-        # Horizon locked perfectly to the center of the screen
-        self.avg_vp = (frame_width // 2, frame_height // 2)
+        # We MUST use the dynamic vanishing point to calculate curve path physics
+        self.avg_vp = (int(self.kf_vp_x.get_position()), int(self.kf_vp_y.get_position()))
         self.avg_left_angle = self.kf_left_angle.get_position()
         self.avg_right_angle = self.kf_right_angle.get_position()
         self.avg_left_bottom = int(self.kf_left.get_position())
@@ -248,7 +248,7 @@ class LaneTracker:
         Uses lateral velocity to detect lane changes and fuses IMU yaw_rate for Active Maneuvers.
         """
         # 1. Lane Change Detection
-        if abs(lateral_velocity) > 1.5:
+        if abs(lateral_velocity) > 20.0:
             return "Straight", 0
         
         offset = vp_x - lane_center_x
@@ -259,9 +259,9 @@ class LaneTracker:
         current_status = "Straight"
         
         if offset > dead_zone:
-            current_status = "Curve Left" if offset < mild_zone else "Sharp Left"
+            current_status = "Curve Right" if offset < mild_zone else "Sharp Right"
         elif offset < -dead_zone:
-            current_status = "Curve Right" if offset > -mild_zone else "Sharp Right"
+            current_status = "Curve Left" if offset > -mild_zone else "Sharp Left"
 
         # --- SENSOR FUSION LOGIC ---
         if use_sensors:

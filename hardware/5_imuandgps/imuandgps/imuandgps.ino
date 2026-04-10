@@ -47,6 +47,10 @@ void loop()
   float yaw_rate = gz / 131.0;
   Serial.print(yaw_rate);
   
+  Serial.print(", \"accel_z\": ");
+  float accel_z = az / 16384.0;
+  Serial.print(accel_z);
+  
   Serial.print(", \"lat\": ");
   if (gps.location.isValid()) {
     Serial.print(gps.location.lat(), 6);

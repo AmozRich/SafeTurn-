@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_7bac502587f5c1dfc608a1104fff7317 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_7bac502587f5c1dfc608a1104fff7317" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_7bac502587f5c1dfc608a1104fff7317 = L.map(
+                "map_7bac502587f5c1dfc608a1104fff7317",
+                {
+                    center: [10.08885, 77.061125],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 14,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_4b59be7dbdc6a75094f2a71a824f4959 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_4b59be7dbdc6a75094f2a71a824f4959.addTo(map_7bac502587f5c1dfc608a1104fff7317);
+        
+    
+            var marker_47c8310fa575062b7eb2dbf0493116c5 = L.marker(
+                [10.0889, 77.0595],
+                {
+}
+            ).addTo(map_7bac502587f5c1dfc608a1104fff7317);
+        
+    
+            var icon_83b83d3b0573a13cf5ac8b643d7bebdd = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "red",
+  "iconColor": "white",
+  "icon": "warning-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_518cef88d5b7548f8655657c37c6f3be = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_a06ce50ebfc95009340b6b214193e9c4 = $(`<div id="html_a06ce50ebfc95009340b6b214193e9c4" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 200px;">             <h4 style="margin-bottom: 5px;">⚠ Hazard Warning</h4>             <b>Type:</b> Sharp Curve<br>             <b>Suggested Speed:</b> <span style="color:red; font-weight:bold;">25 km/h</span><br>             <hr style="margin: 5px 0;">             <small>Lat: 10.08890, Lon: 77.05950</small>         </div>         </div>`)[0];
+                popup_518cef88d5b7548f8655657c37c6f3be.setContent(html_a06ce50ebfc95009340b6b214193e9c4);
+            
+        
+
+        marker_47c8310fa575062b7eb2dbf0493116c5.bindPopup(popup_518cef88d5b7548f8655657c37c6f3be)
+        ;
+
+        
+    
+    
+            marker_47c8310fa575062b7eb2dbf0493116c5.bindTooltip(
+                `<div>
+                     Sharp Curve: 25 km/h
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_47c8310fa575062b7eb2dbf0493116c5.setIcon(icon_83b83d3b0573a13cf5ac8b643d7bebdd);
+            
+    
+            var marker_c6b58bc74f40a49c43d7d94cbc4e00b6 = L.marker(
+                [10.0905, 77.062],
+                {
+}
+            ).addTo(map_7bac502587f5c1dfc608a1104fff7317);
+        
+    
+            var icon_33618830a26e1803715ebf9c3ac938f3 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "orange",
+  "iconColor": "white",
+  "icon": "warning-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_7ed0a7000bd9caadef8d3ddb1376ca9c = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_a28cc7df17bd7912b08c52651b2e6df0 = $(`<div id="html_a28cc7df17bd7912b08c52651b2e6df0" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 200px;">             <h4 style="margin-bottom: 5px;">⚠ Hazard Warning</h4>             <b>Type:</b> Curve<br>             <b>Suggested Speed:</b> <span style="color:orange; font-weight:bold;">35 km/h</span><br>             <hr style="margin: 5px 0;">             <small>Lat: 10.09050, Lon: 77.06200</small>         </div>         </div>`)[0];
+                popup_7ed0a7000bd9caadef8d3ddb1376ca9c.setContent(html_a28cc7df17bd7912b08c52651b2e6df0);
+            
+        
+
+        marker_c6b58bc74f40a49c43d7d94cbc4e00b6.bindPopup(popup_7ed0a7000bd9caadef8d3ddb1376ca9c)
+        ;
+
+        
+    
+    
+            marker_c6b58bc74f40a49c43d7d94cbc4e00b6.bindTooltip(
+                `<div>
+                     Curve: 35 km/h
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_c6b58bc74f40a49c43d7d94cbc4e00b6.setIcon(icon_33618830a26e1803715ebf9c3ac938f3);
+            
+    
+            var marker_7055d935630757e25549b6a42a8eab1d = L.marker(
+                [10.091, 77.065],
+                {
+}
+            ).addTo(map_7bac502587f5c1dfc608a1104fff7317);
+        
+    
+            var icon_82e679fe9f808618229965d2a784b9b5 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "orange",
+  "iconColor": "white",
+  "icon": "warning-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_45dd6b75afea5c696bba2699e1edfea2 = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_7825320a3488ff6fd522596572fdf893 = $(`<div id="html_7825320a3488ff6fd522596572fdf893" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 200px;">             <h4 style="margin-bottom: 5px;">⚠ Hazard Warning</h4>             <b>Type:</b> Slight Curve<br>             <b>Suggested Speed:</b> <span style="color:orange; font-weight:bold;">45 km/h</span><br>             <hr style="margin: 5px 0;">             <small>Lat: 10.09100, Lon: 77.06500</small>         </div>         </div>`)[0];
+                popup_45dd6b75afea5c696bba2699e1edfea2.setContent(html_7825320a3488ff6fd522596572fdf893);
+            
+        
+
+        marker_7055d935630757e25549b6a42a8eab1d.bindPopup(popup_45dd6b75afea5c696bba2699e1edfea2)
+        ;
+
+        
+    
+    
+            marker_7055d935630757e25549b6a42a8eab1d.bindTooltip(
+                `<div>
+                     Slight Curve: 45 km/h
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_7055d935630757e25549b6a42a8eab1d.setIcon(icon_82e679fe9f808618229965d2a784b9b5);
+            
+    
+            var marker_7523b068007e2b9926c44f7469211962 = L.marker(
+                [10.085, 77.058],
+                {
+}
+            ).addTo(map_7bac502587f5c1dfc608a1104fff7317);
+        
+    
+            var icon_e4f0e7b0651a8243e2a84d84311ba298 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "red",
+  "iconColor": "white",
+  "icon": "warning-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_2c91d8a1b6d319e41ed982b73cfae34a = L.popup({
+  "maxWidth": 300,
+});
+
+        
+            
+                var html_300581f81299d552515acd581fa75b35 = $(`<div id="html_300581f81299d552515acd581fa75b35" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 200px;">             <h4 style="margin-bottom: 5px;">⚠ Hazard Warning</h4>             <b>Type:</b> Sharp Curve<br>             <b>Suggested Speed:</b> <span style="color:red; font-weight:bold;">30 km/h</span><br>             <hr style="margin: 5px 0;">             <small>Lat: 10.08500, Lon: 77.05800</small>         </div>         </div>`)[0];
+                popup_2c91d8a1b6d319e41ed982b73cfae34a.setContent(html_300581f81299d552515acd581fa75b35);
+            
+        
+
+        marker_7523b068007e2b9926c44f7469211962.bindPopup(popup_2c91d8a1b6d319e41ed982b73cfae34a)
+        ;
+
+        
+    
+    
+            marker_7523b068007e2b9926c44f7469211962.bindTooltip(
+                `<div>
+                     Sharp Curve: 30 km/h
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+                marker_7523b068007e2b9926c44f7469211962.setIcon(icon_e4f0e7b0651a8243e2a84d84311ba298);
+            
+</script>
+</html>

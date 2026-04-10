@@ -9,6 +9,7 @@ from tracker import LaneTracker, LANE_WIDTH_PX
 from sensor_bridge import SensorBridge
 from start_screen import StartScreen
 from gps_utils import GPSCurvatureEstimator
+from hazard_manager import HazardManager
 
 
 # --- CONFIGURATION ---
@@ -125,7 +126,7 @@ def generate_cubic_bezier_points(p0, p1, p2, p3, num_points=20, cutoff=0.9):
 
 # Professional ADAS-style Display
 # Professional Minimalist AR Display
-def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts, vp_coord, lane_width_px):
+def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts, vp_coord, lane_width_px, upcoming_hazard=None):
     height, width = image.shape[:2]
     vp_x, vp_y = vp_coord
     
@@ -213,6 +214,27 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
     cv2.line(image, (l_x, vp_y - 20), (l_x, vp_y + 20), b_color, 1, cv2.LINE_AA)
     cv2.line(image, (r_x, vp_y - 20), (r_x, vp_y + 20), b_color, 1, cv2.LINE_AA)
 
+    # --- 3. PREDICTIVE HAZARD OVERLAY ---
+    if upcoming_hazard:
+        warn_y = height // 4
+        # Red pulsating overlay base
+        cv2.rectangle(image, (0, warn_y - 40), (width, warn_y + 40), (0, 0, 150), -1)
+        
+        status_name = upcoming_hazard.get('status', 'HAZARD').upper()
+        opt_speed = upcoming_hazard.get('optimal_speed', 30)
+        
+        warn_text = f"!! {status_name} AHEAD ({upcoming_hazard['distance_m']}m) - SLOW TO {opt_speed} KM/H !!"
+        w_size = cv2.getTextSize(warn_text, font, 1.2, 3)[0]
+        w_x = center_x - (w_size[0] // 2)
+        cv2.putText(image, warn_text, (w_x, warn_y - 5), font, 1.2, (255, 255, 255), 3, cv2.LINE_AA)
+        
+        # Subtitle: Action required
+        act_text = f"SYSTEM PREPARED FOR DANGER"
+        a_size = cv2.getTextSize(act_text, font, 0.8, 2)[0]
+        a_x = center_x - (a_size[0] // 2)
+        cv2.putText(image, act_text, (a_x, warn_y + 30), font, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+
+
 
 def main():
     # Pass an unstarted bridge so the UI can enable sensor checkboxes
@@ -275,6 +297,7 @@ def main():
     # Initialize Tracker locally
     tracker = LaneTracker()
     gps_estimator = GPSCurvatureEstimator()
+    hazard_manager = HazardManager()
     
     consecutive_lost_frames = 0
     tracker_initialized = False # To ignore first-frame jump
@@ -364,16 +387,26 @@ def main():
             current_speed = int(sensor_data.get('spd', 0))
             lat = sensor_data.get('lat', 0.0)
             lng = sensor_data.get('lng', 0.0)
+            accel_z = sensor_data.get('accel_z', 0.0) # Flat road is now 0.0G due to calibration
             
             gps_curvature = gps_estimator.update(lat, lng, current_speed)
+            
+            # IMU Vertical Shock Confirmation
+            # Uses distance-based listening window (within 20 meters of passed pothole)
+            if abs(accel_z) > 0.6: # Severe bump
+                passed_pothole = hazard_manager.get_recently_passed_hazard(lat, lng, radius_m=20.0)
+                if passed_pothole:
+                    logged_speed = passed_pothole['optimal_speed']
+                    # Velocity condition: Only downgrade if driver actually followed the speed limit!
+                    if current_speed <= logged_speed + 10:
+                        hazard_manager.downgrade_pothole(passed_pothole['lat'], passed_pothole['lon'], speed_reduction=5)
         
-        # Calculate search offset based on yaw (Biasing the sliding window)
-        search_bias = int(yaw_rate * 5)
+        # Notice: Removing yaw_rate search_bias to decouple CV optical tracker from IMU sensor
 
         # --- FUSE WITH PIXEL DETECTION (Fix & Fuse - Moved Upstream) ---
         # 1. Pixel-based detection (Raw) - use proc_frame & precomputed gray
         binary_lane = detect_lane_pixels(proc_frame_blurred, gray=gray)
-        l_base_proc, r_base_proc = find_lane_boundaries(binary_lane, search_offset=search_bias//2)
+        l_base_proc, r_base_proc = find_lane_boundaries(binary_lane, search_offset=0)
         
         # Scale bases back to display dimensions
         l_base = int(l_base_proc * DISPLAY_WIDTH / PROC_WIDTH)
@@ -457,6 +490,14 @@ def main():
         # Output a target speed that is safe but realistic to brake towards
         optimal_speed = min(max(current_speed, 30), base_advisory) if current_speed > 5 else 0
 
+        # --- HAZARD LOGGING AND PREDICTION ---
+        if status != "Straight":
+            # Log this curve if it's dangerous
+            hazard_manager.add_hazard(lat, lng, status, optimal_speed)
+            
+        # Check if we are approaching a previously logged hazard too fast
+        upcoming_hazard = hazard_manager.get_upcoming_hazard(lat, lng, current_speed)
+
         # 4. Draw MINIMALIST AR HUD
         
         # Smart Control Point Logic (Clamping)
@@ -510,7 +551,8 @@ def main():
             left_curve_pts, 
             right_curve_pts, 
             (vp_x, vp_y),
-            current_lane_width
+            current_lane_width,
+            upcoming_hazard=upcoming_hazard
         )
 
         cv2.imshow('SafeTurn+ Main', frame)

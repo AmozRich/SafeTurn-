@@ -2,14 +2,23 @@ import tkinter as tk
 from tkinter import messagebox
 import time
 import threading
+import os
+import webbrowser
 
 class StartScreen:
     def __init__(self, bridge=None):
         self.bridge = bridge
         self.root = tk.Tk()
         self.root.title("SafeTurn+ Launcher")
-        self.root.geometry("400x350")
-        self.root.configure(bg="#2c3e50")
+        self.root.geometry("400x560")
+        
+        # Modern Dark Theme Colors
+        self.bg_color = "#1A202C" # Dark gray/blue back
+        self.fg_color = "#E2E8F0" # Light gray text
+        self.accent_bg = "#2D3748" # Slightly lighter gray for frames
+        self.hover_color = "#4A5568"
+        
+        self.root.configure(bg=self.bg_color)
         
         # User configurations
         self.use_sensors = tk.BooleanVar(value=True if bridge else False)
@@ -19,112 +28,140 @@ class StartScreen:
         self.setup_ui()
 
     def setup_ui(self):
-        # Title
-        title_label = tk.Label(
-            self.root, 
-            text="SafeTurn+", 
-            font=("Helvetica", 24, "bold"), 
-            bg="#2c3e50", 
-            fg="#ecf0f1"
-        )
-        title_label.pack(pady=20)
+        # Title Header
+        header_frame = tk.Frame(self.root, bg=self.bg_color, pady=15)
+        header_frame.pack(fill=tk.X)
         
-        # Options Frame
-        options_frame = tk.Frame(self.root, bg="#2c3e50")
-        options_frame.pack(pady=10)
+        title_label = tk.Label(
+            header_frame, 
+            text="SafeTurn+", 
+            font=("Segoe UI", 26, "bold"), 
+            bg=self.bg_color, 
+            fg="#4299E1" # Bright blue accent
+        )
+        title_label.pack()
+        
+        subtitle_label = tk.Label(
+            header_frame, 
+            text="Advanced Driver Assistance System", 
+            font=("Segoe UI", 10), 
+            bg=self.bg_color, 
+            fg="#A0AEC0"
+        )
+        subtitle_label.pack()
+        
+        # Config Panel
+        config_frame = tk.Frame(self.root, bg=self.accent_bg, padx=15, pady=15, bd=0, relief=tk.FLAT)
+        config_frame.pack(fill=tk.X, padx=30, pady=10)
+        
+        tk.Label(config_frame, text="CONFIGURATION", font=("Segoe UI", 10, "bold"), bg=self.accent_bg, fg="#718096").pack(anchor="w", pady=(0, 5))
         
         # Sensor Toggle
         sensor_cb = tk.Checkbutton(
-            options_frame, 
+            config_frame, 
             text="Use Hardware Sensors", 
             variable=self.use_sensors,
             command=self.on_sensor_toggle,
-            font=("Helvetica", 12),
-            bg="#2c3e50",
-            fg="#ecf0f1",
-            selectcolor="#34495e",
-            activebackground="#2c3e50",
-            activeforeground="#ecf0f1"
+            font=("Segoe UI", 11),
+            bg=self.accent_bg,
+            fg=self.fg_color,
+            selectcolor=self.bg_color,
+            activebackground=self.accent_bg,
+            activeforeground=self.fg_color,
+            bd=0
         )
-        sensor_cb.pack(anchor="w", pady=5)
+        sensor_cb.pack(anchor="w", pady=2)
         
         # Webcam Toggle and Index
-        webcam_frame = tk.Frame(options_frame, bg="#2c3e50")
-        webcam_frame.pack(anchor="w", pady=5)
+        webcam_frame = tk.Frame(config_frame, bg=self.accent_bg)
+        webcam_frame.pack(anchor="w", pady=2)
         
         webcam_cb = tk.Checkbutton(
             webcam_frame, 
             text="Enable Live Webcam", 
             variable=self.enable_webcam,
-            font=("Helvetica", 12),
-            bg="#2c3e50",
-            fg="#ecf0f1",
-            selectcolor="#34495e",
-            activebackground="#2c3e50",
-            activeforeground="#ecf0f1"
+            font=("Segoe UI", 11),
+            bg=self.accent_bg,
+            fg=self.fg_color,
+            selectcolor=self.bg_color,
+            activebackground=self.accent_bg,
+            activeforeground=self.fg_color,
+            bd=0
         )
         webcam_cb.pack(side=tk.LEFT)
         
         self.webcam_index = tk.IntVar(value=1)
-        tk.Label(webcam_frame, text=" Index:", bg="#2c3e50", fg="#ecf0f1", font=("Helvetica", 12)).pack(side=tk.LEFT, padx=(10, 2))
+        tk.Label(webcam_frame, text=" Port:", bg=self.accent_bg, fg="#A0AEC0", font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(5, 2))
         webcam_spinbox = tk.Spinbox(
             webcam_frame, 
             from_=0, 
             to=5, 
             textvariable=self.webcam_index, 
             width=3,
-            font=("Helvetica", 12)
+            font=("Segoe UI", 10),
+            bg=self.bg_color,
+            fg=self.fg_color,
+            buttonbackground=self.accent_bg,
+            bd=0
         )
         webcam_spinbox.pack(side=tk.LEFT)
         
-        # Calibration Button
-        self.calib_btn = tk.Button(
-            self.root, 
-            text="Calibrate Sensors", 
-            command=self.calibrate_sensors,
-            font=("Helvetica", 12, "bold"),
-            bg="#f39c12",
-            fg="white",
-            relief=tk.FLAT,
-            width=20
-        )
-        self.calib_btn.pack(pady=15)
+        # Action Buttons Panel
+        action_frame = tk.Frame(self.root, bg=self.bg_color, pady=10)
+        action_frame.pack(fill=tk.X, padx=30)
         
-        # Start Button
-        start_btn = tk.Button(
-            self.root, 
-            text="Start Curve Analysis", 
-            command=self.start_analysis,
-            font=("Helvetica", 14, "bold"),
-            bg="#27ae60",
-            fg="white",
-            relief=tk.FLAT,
-            width=20
-        )
-        start_btn.pack(pady=10)
+        def create_button(parent, text, cmd, bg_col, fg_col="white"):
+            return tk.Button(
+                parent,
+                text=text,
+                command=cmd,
+                font=("Segoe UI", 11, "bold"),
+                bg=bg_col,
+                fg=fg_col,
+                relief=tk.FLAT,
+                borderwidth=0,
+                pady=10,
+                activebackground=self.hover_color,
+                activeforeground=fg_col
+            )
+            
+        self.calib_btn = create_button(action_frame, "⚙ Calibrate Sensors", self.calibrate_sensors, "#ECC94B", "black")
+        self.calib_btn.pack(fill=tk.X, pady=5)
         
-        # Pothole Button
-        pothole_btn = tk.Button(
-            self.root, 
-            text="Launch Pothole Scanner", 
-            command=self.start_pothole,
-            font=("Helvetica", 14, "bold"),
-            bg="#d35400",
-            fg="white",
-            relief=tk.FLAT,
-            width=20
-        )
-        pothole_btn.pack(pady=10)
+        start_btn = create_button(action_frame, "▶ Start ADAS Drive", self.start_analysis, "#48BB78")
+        start_btn.pack(fill=tk.X, pady=5)
+        
+        map_btn = create_button(action_frame, "🗺 View Hazard Map", self.view_map, "#4299E1")
+        map_btn.pack(fill=tk.X, pady=5)
+        
+        pothole_btn = create_button(action_frame, "🔍 Launch Pothole Scanner", self.start_pothole, "#ED8936")
+        pothole_btn.pack(fill=tk.X, pady=5)
         
         # Status Label
         self.status_label = tk.Label(
             self.root, 
-            text="", 
-            font=("Helvetica", 10), 
-            bg="#2c3e50", 
-            fg="#bdc3c7"
+            text="Ready.", 
+            font=("Segoe UI", 9), 
+            bg=self.bg_color, 
+            fg="#718096"
         )
-        self.status_label.pack(side=tk.BOTTOM, pady=10)
+        self.status_label.pack(side=tk.BOTTOM, pady=15)
+
+    def view_map(self):
+        self.status_label.config(text="Generating Hazard Map...")
+        self.root.update()
+        try:
+            import generate_hazard_map
+            generate_hazard_map.generate_map()
+            
+            map_path = os.path.abspath("safeturn_map.html")
+            if os.path.exists(map_path):
+                webbrowser.open(f"file:///{map_path}")
+                self.status_label.config(text="Hazard Map opened in browser.")
+            else:
+                self.status_label.config(text="No Map Found. Start driving first!")
+        except Exception as e:
+            self.status_label.config(text=f"Error loading map: {str(e)}")
 
     def on_sensor_toggle(self):
         if self.use_sensors.get() and self.bridge and not self.bridge.running:

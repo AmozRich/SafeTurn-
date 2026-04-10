@@ -13,10 +13,12 @@ class SensorBridge:
             "lat": 0.0,
             "lng": 0.0,
             "spd": 0.0,
+            "accel_z": 1.0,
             "crash": False
         }
         self.offsets = {
-            "yaw": 0.0
+            "yaw": 0.0,
+            "accel_z": 1.0
         }
         self.lock = threading.Lock()
         self.thread = None
@@ -79,21 +81,26 @@ class SensorBridge:
         print(f"Starting sensor calibration for {duration} seconds...")
         end_time = time.time() + duration
         yaw_samples = []
+        az_samples = []
         while time.time() < end_time and self.running:
             with self.lock:
-                yaw_samples.append(self.latest_data['yaw'])
+                yaw_samples.append(self.latest_data.get('yaw', 0.0))
+                az_samples.append(self.latest_data.get('accel_z', 1.0))
             time.sleep(0.05)
             
         if yaw_samples:
             avg_yaw = sum(yaw_samples) / len(yaw_samples)
+            avg_az = sum(az_samples) / len(az_samples) if az_samples else 1.0
             with self.lock:
                 self.offsets['yaw'] = avg_yaw
-            print(f"Calibration complete: Yaw Offset = {avg_yaw}")
+                self.offsets['accel_z'] = avg_az
+            print(f"Calibration complete: Yaw = {avg_yaw:.2f}, Z-Axis = {avg_az:.2f}G")
             return True
         return False
 
     def get_latest_data(self):
         with self.lock:
             data = self.latest_data.copy()
-            data['yaw'] -= self.offsets['yaw']
+            data['yaw'] = data.get('yaw', 0.0) - self.offsets['yaw']
+            data['accel_z'] = data.get('accel_z', 1.0) - self.offsets['accel_z']
             return data

@@ -76,16 +76,9 @@ class LaneTracker:
         self.kf_left_angle.predict(dt)
         self.kf_right_angle.predict(dt)
 
-        # CONTROL INPUT (Yaw Rate)
-        # Shift expectations based on car turning. 
-        # If we turn Left (+yaw), objects move Right on screen (-x).
-        yaw_shift = int(yaw_rate * 10 * speed_factor) 
-        
-        # Direct modification of State Position (External Force)
-        self.kf_left.x[0, 0] -= yaw_shift
-        self.kf_right.x[0, 0] -= yaw_shift
-        self.kf_vp_x.x[0, 0] -= yaw_shift
-        # VP Y is mostly unaffected by yaw, maybe pitch, but we ignore for now.
+        # NO LONGER APPLYING YAW SHIFT TO KALMAN FILTER.
+        # This decouples physical sensor noise from the CV optical tracking.
+        yaw_shift = 0 
 
             
         # 1. Separate Lines into Left and Right Candidates
@@ -271,18 +264,22 @@ class LaneTracker:
             if "Sharp" in sensor_status and speed > 60:
                 print(f"WARNING: Sharp curve ahead, slow down! (Speed: {speed}km/h, Yaw: {yaw_rate:.1f})")
             
-            # Fusion: Sensor is the base when available, Vision can only escalate
             vision_status = current_status
-            current_status = sensor_status
             
             severity = {
                 "Straight": 0, 
-                "Mild Curve Left": 1, "Mild Curve Right": 1, 
                 "Curve Left": 2, "Curve Right": 2, 
-                "Sharp Left": 3, "Sharp Right": 3
+                "Sharp Left": 3, "Sharp Right": 3,
+                # Sensor specific string matches
+                "Mild Curve Left": 1, "Mild Curve Right": 1
             }
-            if severity.get(vision_status, 0) > severity.get(current_status, 0):
+            
+            # If Vision (upcoming) is worse than Sensor (current), use Vision to prepare driver
+            # If Sensor (current) is worse than Vision (upcoming), use Sensor since we are actively in danger
+            if severity.get(vision_status, 0) > severity.get(sensor_status, 0):
                 current_status = vision_status
+            else:
+                current_status = sensor_status
             
         # Hysteresis
         if current_status != self.last_status:

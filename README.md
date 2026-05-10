@@ -6,7 +6,7 @@ SafeTurn+ is a sophisticated, real-time driver assistance system designed to mim
 ## 🌟 Key Features
 
 - **👁️ Live Computer Vision**: Utilizes OpenCV to track white and yellow road lanes in real-time.
-- **🏎️ Sensor Fusion**: Integrates an MPU6050 (yaw rate) and Neo6M GPS (speed) via an ESP8266 NodeMCU to detect vehicle physics before the camera even sees a curve.
+- **🏎️ Sensor Fusion**: Integrates an MPU6050 (yaw rate) and Neo6M GPS (speed) via an ESP32 MCU to detect vehicle physics before the camera even sees a curve.
 - **🧠 Kalman Filter Stabilization**: Drastically smooths vision-tracking jitter and recovers instantly from blank frames.
 - **🚥 Speed-Adaptive HUD**:
   - **🔵 Straight**: Path is clear, high safe speed.
@@ -19,24 +19,24 @@ SafeTurn+ is a sophisticated, real-time driver assistance system designed to mim
 
 - **Software Core**: Python 3.12 🐍
 - **Computer Vision**: OpenCV (`cv2`) & NumPy 🧮
-- **Hardware Controller**: C++ / Arduino (Flashing ESP8266)
+- **Hardware Controller**: C++ / Arduino (Flashing ESP32)
 - **Dependency Management**: `uv`
 
 ## 🔌 Hardware Requirements
 
 To utilize the full sensor fusion capabilities, you will need:
-- **MCU**: NodeMCU ESP8266 (or ESP32)
+- **MCU**: ESP32
 - **IMU**: MPU6050 Accelerometer/Gyroscope
 - **GPS**: Neo6M Module
 - **Webcam**: Standard 720p/1080p USB Camera
-- **Wiring**: I2C (D1/D2) for MPU, SoftwareSerial (D5/D6) for GPS.
+- **Wiring**: I2C (SDA 21 / SCL 22) for MPU, HardwareSerial 2 (RX 19 / TX 18) for GPS.
 
 *Note: The system can also run purely on the computer vision core by setting `USE_SENSORS = False` in `main.py`.*
 
 ## 🚀 Getting Started
 
 ### 1. Hardware Setup (Optional)
-Upload the `hardware/5_imuandgps/imuandgps/imuandgps.ino` sketch to your ESP8266 via the Arduino IDE. Ensure your MCU is plugged into your PC via USB and that it is emitting 10Hz JSON packets: `{"yaw": 0.0, "lat": 0.0, "lng": 0.0, "spd": 0.0, "crash": false}`.
+Upload the `hardware/5_imuandgps/imuandgps/imuandgps.ino` sketch to your ESP32 via the Arduino IDE. Ensure your MCU is plugged into your PC via USB and that it is emitting 10Hz JSON packets: `{"yaw": 0.0, "lat": 0.0, "lng": 0.0, "spd": 0.0, "crash": false}`.
 
 ### 2. Software Setup
 Using the wildly fast `uv` package manager:

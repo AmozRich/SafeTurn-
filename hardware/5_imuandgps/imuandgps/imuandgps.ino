@@ -1,20 +1,26 @@
 #include <Wire.h>
 #include <MPU6050.h>
 #include <TinyGPS++.h>
-#include <SoftwareSerial.h>
+#include <HardwareSerial.h>
+
+// --- ESP32 Pin Configuration ---
+#define I2C_SDA_PIN 21
+#define I2C_SCL_PIN 22
+#define GPS_RX_PIN 19
+#define GPS_TX_PIN 18
 
 MPU6050 mpu;
 TinyGPSPlus gps;
-
-SoftwareSerial gpsSerial(D5, D6);
 
 void setup()
 {
   Serial.begin(115200);
 
-  Wire.begin(D2, D1);
+  // Initialize I2C with specified pins
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
-  gpsSerial.begin(9600);
+  // Initialize GPS Hardware Serial 2
+  Serial2.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
 
   Serial.println("System Starting...");
 
@@ -30,9 +36,9 @@ void loop()
 {
 
   // Always read GPS first
-  while (gpsSerial.available())
+  while (Serial2.available())
   {
-    gps.encode(gpsSerial.read());
+    gps.encode(Serial2.read());
   }
 
   // Read MPU

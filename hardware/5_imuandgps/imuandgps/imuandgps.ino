@@ -80,6 +80,16 @@ void loop()
     Serial.print(0.0);
   }
   
+  Serial.print(", \"sat\": ");
+  Serial.print(gps.satellites.value());
+
+  Serial.print(", \"hdop\": ");
+  if (gps.hdop.isValid()) {
+    Serial.print(gps.hdop.hdop());
+  } else {
+    Serial.print(99.9);
+  }
+
   Serial.println(", \"crash\": false}");
 
   delay(100);

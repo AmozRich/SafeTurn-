@@ -15,7 +15,9 @@ class SensorBridge:
             "lng": 0.0,
             "spd": 0.0,
             "accel_z": 1.0,
-            "crash": False
+            "crash": False,
+            "sat": 0,
+            "hdop": 99.9
         }
         self.offsets = {
             "yaw": 0.0,
@@ -78,15 +80,28 @@ class SensorBridge:
                 self.serial_conn = None
                 time.sleep(2)
 
-    def calibrate(self, duration=2.0):
+    def calibrate(self, duration=2.0, on_progress=None):
+        """
+        Calibrate sensors over `duration` seconds.
+        on_progress: optional callback(percent, avg_yaw, avg_az, sample_count)
+        """
         print(f"Starting sensor calibration for {duration} seconds...")
-        end_time = time.time() + duration
+        start_time = time.time()
+        end_time = start_time + duration
         yaw_samples = []
         az_samples = []
         while time.time() < end_time and self.running:
             with self.lock:
                 yaw_samples.append(self.latest_data.get('yaw', 0.0))
                 az_samples.append(self.latest_data.get('accel_z', 1.0))
+            
+            if on_progress and yaw_samples:
+                elapsed = time.time() - start_time
+                pct = min(100, int((elapsed / duration) * 100))
+                avg_yaw = sum(yaw_samples) / len(yaw_samples)
+                avg_az = sum(az_samples) / len(az_samples)
+                on_progress(pct, avg_yaw, avg_az, len(yaw_samples))
+            
             time.sleep(0.05)
             
         if yaw_samples:
@@ -96,6 +111,8 @@ class SensorBridge:
                 self.offsets['yaw'] = avg_yaw
                 self.offsets['accel_z'] = avg_az
             print(f"Calibration complete: Yaw = {avg_yaw:.2f}, Z-Axis = {avg_az:.2f}G")
+            if on_progress:
+                on_progress(100, avg_yaw, avg_az, len(yaw_samples))
             return True
         return False
 

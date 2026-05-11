@@ -167,10 +167,10 @@ class LaneTracker:
         vp_ok = False
         if curr_vp is not None:
             vx, vy = curr_vp
-            if frame_height * 0.2 < vy < frame_height * 0.8:
+            if frame_height * 0.35 < vy < frame_height * 0.65:
                 # Basic bounds check vs predicted state
                 pred_vx = self.kf_vp_x.get_position()
-                if abs(vx - pred_vx) < frame_width * 0.2: # Allow 20% jump, else ignore
+                if abs(vx - pred_vx) < frame_width * 0.1: # Allow 10% jump, else ignore
                     vp_ok = True
                 # Start up condition
                 if self.kf_vp_x.P[0,0] > 500: vp_ok = True
@@ -191,7 +191,9 @@ class LaneTracker:
 
         # Retrieve Smoothed States
         # We MUST use the dynamic vanishing point to calculate curve path physics
-        self.avg_vp = (int(self.kf_vp_x.get_position()), int(self.kf_vp_y.get_position()))
+        # Hard-clamp VP Y to 40%-60% of frame height to prevent sky-lock
+        clamped_vp_y = int(np.clip(self.kf_vp_y.get_position(), frame_height * 0.4, frame_height * 0.6))
+        self.avg_vp = (int(self.kf_vp_x.get_position()), clamped_vp_y)
         self.avg_left_angle = self.kf_left_angle.get_position()
         self.avg_right_angle = self.kf_right_angle.get_position()
         self.avg_left_bottom = int(self.kf_left.get_position())

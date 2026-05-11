@@ -34,10 +34,13 @@ def region_of_interest(image, vp_x=None):
     # Clamp apex to screen bounds (optional safety)
     apex_x = max(0, min(width, apex_x))
 
+    # Hard-clamp: ROI apex never above 50% (bottom half only)
+    apex_y = int(height * 0.5)
+
     polygons = np.array([
         [
             (0, height), 
-            (apex_x, int(height * 0.55)), # Horizon (Dynamic)
+            (apex_x, apex_y),
             (width, height) 
         ]
     ])
@@ -123,6 +126,10 @@ def generate_cubic_bezier_points(p0, p1, p2, p3, num_points=20, cutoff=0.9):
     x = ((1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]).astype(int)
     y = ((1-t)**3 * p0[1] + 3*(1-t)**2 * t * p1[1] + 3*(1-t) * t**2 * p2[1] + t**3 * p3[1]).astype(int)
     return list(zip(x, y))
+
+def clamp_points_to_screen(pts, w, h):
+    """Clamp all points to within screen bounds to prevent off-screen rendering."""
+    return [(max(0, min(w - 1, x)), max(0, min(h - 1, y))) for x, y in pts]
 
 # Professional ADAS-style Display
 # Professional Minimalist AR Display
@@ -539,9 +546,21 @@ def main():
         p2_r = (int(safe_r_bottom + (vp_x - safe_r_bottom) * 0.7) + control_shift_x, int(height - (height - vp_y) * 0.7))
         p3_r = (vp_x, vp_y)
         
-        # Generate Progressive Points
-        left_curve_pts = generate_cubic_bezier_points(p0_l, p1_l, p2_l, p3_l, 40)
-        right_curve_pts = generate_cubic_bezier_points(p0_r, p1_r, p2_r, p3_r, 40)
+        # Clamp control points to screen bounds before Bezier generation
+        p1_l = (int(np.clip(p1_l[0], 0, DISPLAY_WIDTH - 1)), p1_l[1])
+        p2_l = (int(np.clip(p2_l[0], 0, DISPLAY_WIDTH - 1)), p2_l[1])
+        p1_r = (int(np.clip(p1_r[0], 0, DISPLAY_WIDTH - 1)), p1_r[1])
+        p2_r = (int(np.clip(p2_r[0], 0, DISPLAY_WIDTH - 1)), p2_r[1])
+        
+        # Generate Progressive Points (clamped to screen)
+        left_curve_pts = clamp_points_to_screen(
+            generate_cubic_bezier_points(p0_l, p1_l, p2_l, p3_l, 40),
+            DISPLAY_WIDTH, DISPLAY_HEIGHT
+        )
+        right_curve_pts = clamp_points_to_screen(
+            generate_cubic_bezier_points(p0_r, p1_r, p2_r, p3_r, 40),
+            DISPLAY_WIDTH, DISPLAY_HEIGHT
+        )
 
         draw_minimalist_hud(
             frame, 

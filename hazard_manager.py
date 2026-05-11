@@ -40,7 +40,14 @@ class HazardManager:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         return R * c
         
-    def add_hazard(self, lat, lon, curve_status, optimal_speed):
+    def _angular_difference(self, heading1, heading2):
+        """Calculate the smallest angular difference between two headings (0-360)."""
+        diff = abs(heading1 - heading2) % 360
+        if diff > 180:
+            diff = 360 - diff
+        return diff
+        
+    def add_hazard(self, lat, lon, curve_status, optimal_speed, heading=0.0):
         """
         Record a curve into the database. 
         Will deduplicate if within 10 meters of an existing curve.
@@ -52,13 +59,17 @@ class HazardManager:
         for h in self.hazards:
             dist = self._haversine_distance(lat, lon, h['lat'], h['lon'])
             if dist <= 10.0:
-                # Update existing if this newly driven pass suggests a lower (safer) optimal speed
-                if optimal_speed < h['optimal_speed']:
-                    h['optimal_speed'] = optimal_speed
-                    h['status'] = curve_status
-                    h['updated_at'] = datetime.now().isoformat()
-                    self.save_hazards()
-                return # Already exists or updated within 10m
+                # Only deduplicate if travelling in roughly the same direction (+/- 60 deg)
+                # This ensures we can log the curve separately for the opposite direction
+                if self._angular_difference(heading, h.get('heading', heading)) <= 60:
+                    # Update existing if this newly driven pass suggests a lower (safer) optimal speed
+                    if optimal_speed < h['optimal_speed']:
+                        h['optimal_speed'] = optimal_speed
+                        h['status'] = curve_status
+                        h['heading'] = heading # Update with latest heading
+                        h['updated_at'] = datetime.now().isoformat()
+                        self.save_hazards()
+                    return # Already exists or updated within 10m in the same direction
                 
         # If not deduplicated, add as new
         new_hazard = {
@@ -66,6 +77,7 @@ class HazardManager:
             "lon": lon,
             "status": curve_status,
             "optimal_speed": optimal_speed,
+            "heading": heading,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
@@ -87,7 +99,7 @@ class HazardManager:
         # Minimum warning distance is 30m, max scaling up based on high speeds
         return max(30.0, min(total_dist, 250.0))
         
-    def get_upcoming_hazard(self, current_lat, current_lon, current_speed_kmh):
+    def get_upcoming_hazard(self, current_lat, current_lon, current_speed_kmh, current_heading=0.0):
         """
         Checks if the vehicle is approaching any logged hazard too fast.
         """
@@ -100,6 +112,12 @@ class HazardManager:
         min_dist = float('inf')
         
         for h in self.hazards:
+            # Check heading first if it exists
+            if 'heading' in h:
+                diff = self._angular_difference(current_heading, h['heading'])
+                if 60 < diff < 120:
+                    continue # Ignore perpendicular intersections
+            
             dist = self._haversine_distance(current_lat, current_lon, h['lat'], h['lon'])
             if dist <= warning_radius:
                 # Only warn if current speed is greater than optimal speed AND it's the closest one
@@ -108,6 +126,16 @@ class HazardManager:
                         min_dist = dist
                         upcoming = dict(h) # Make copy to append dynamic data
                         upcoming['distance_m'] = int(dist)
+                        
+                        # Apply mirroring if opposite direction
+                        if 'heading' in h:
+                            diff = self._angular_difference(current_heading, h['heading'])
+                            if diff >= 120:
+                                # Mirror status
+                                if "Left" in upcoming['status']:
+                                    upcoming['status'] = upcoming['status'].replace("Left", "Right")
+                                elif "Right" in upcoming['status']:
+                                    upcoming['status'] = upcoming['status'].replace("Right", "Left")
                         
         return upcoming
 

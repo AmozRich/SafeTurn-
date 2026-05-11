@@ -4,6 +4,7 @@ class GPSCurvatureEstimator:
     def __init__(self):
         self.buffer = []
         self.current_curvature = 0.0
+        self.current_heading = 0.0
 
     def update(self, lat, lng, current_speed):
         if lat == 0.0 or lng == 0.0 or current_speed < 5:
@@ -40,6 +41,9 @@ class GPSCurvatureEstimator:
 
                 heading1 = math.degrees(math.atan2(y2 - y1, x2 - x1))
                 heading2 = math.degrees(math.atan2(y3 - y2, x3 - x2))
+                
+                # Expose current compass heading (0 = North, 90 = East)
+                self.current_heading = (90 - heading2) % 360
 
                 delta_heading = heading2 - heading1
                 delta_heading = (delta_heading + 180) % 360 - 180

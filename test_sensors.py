@@ -23,7 +23,7 @@ def test_sensors():
     
     with open(csv_filename, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "GPS_Curvature", "Status"])
+        writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "GPS_Curvature", "Status", "Heading"])
         
     print(f"Logging data to {csv_filename}")
     
@@ -50,7 +50,7 @@ def test_sensors():
                 print(f"!!! WARNING: Sharp curve ahead, slow down! (Speed: {current_speed}km/h, Yaw: {yaw_rate:.1f}, GPS Curv: {gps_curvature:.4f}) !!!")
                     
             print(f"Raw Data: {data}")
-            print(f"Calculated -> Speed: {current_speed}km/h | Yaw: {yaw_rate:.2f} | GPS Curv: {gps_curvature:.4f} | Status: {current_status}")
+            print(f"Calculated -> Speed: {current_speed}km/h | Yaw: {yaw_rate:.2f} | GPS Curv: {gps_curvature:.4f} | Status: {current_status} | Head: {gps_estimator.current_heading:.1f}")
             print("-" * 50)
             
             # Log to CSV
@@ -61,7 +61,8 @@ def test_sensors():
                 current_speed, 
                 yaw_rate,
                 gps_curvature,
-                current_status
+                current_status,
+                gps_estimator.current_heading
             ])
             csv_file.flush()
                 

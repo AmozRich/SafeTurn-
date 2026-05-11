@@ -315,11 +315,10 @@ def main():
     breadcrumb_file = None
     crumb_writer = None
     
-    # Write header if file doesn't exist yet
     if USE_SENSORS:
         breadcrumb_file = open(breadcrumb_filename, "w", newline="")
         crumb_writer = csv.writer(breadcrumb_file)
-        crumb_writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve"])
+        crumb_writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "Curve", "Heading"])
 
     while True:
         ret, frame = cap.read()
@@ -472,7 +471,8 @@ def main():
                             lng, 
                             current_speed, 
                             yaw_rate,
-                            status
+                            status,
+                            gps_estimator.current_heading
                         ])
                         breadcrumb_file.flush()
                         last_log_time = current_time_sec
@@ -493,10 +493,10 @@ def main():
         # --- HAZARD LOGGING AND PREDICTION ---
         if status != "Straight":
             # Log this curve if it's dangerous
-            hazard_manager.add_hazard(lat, lng, status, optimal_speed)
+            hazard_manager.add_hazard(lat, lng, status, optimal_speed, gps_estimator.current_heading)
             
         # Check if we are approaching a previously logged hazard too fast
-        upcoming_hazard = hazard_manager.get_upcoming_hazard(lat, lng, current_speed)
+        upcoming_hazard = hazard_manager.get_upcoming_hazard(lat, lng, current_speed, current_heading=gps_estimator.current_heading)
 
         # 4. Draw MINIMALIST AR HUD
         

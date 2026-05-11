@@ -24,7 +24,7 @@ def log_breadcrumbs():
     
     with open(csv_filename, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "GPS_Curvature", "Status"])
+        writer.writerow(["Timestamp", "Latitude", "Longitude", "Speed_kmh", "Yaw_Rate", "GPS_Curvature", "Status", "Heading"])
         
     print(f"Started logging to {csv_filename}. Press Ctrl+C to stop.")
     
@@ -53,11 +53,12 @@ def log_breadcrumbs():
                 current_speed, 
                 yaw_rate,
                 gps_curvature,
-                current_status
+                current_status,
+                gps_estimator.current_heading
             ])
             csv_file.flush()
                 
-            print(f"Logged point: Lat={lat}, Lng={lng}, Speed={current_speed}km/h, Yaw={yaw_rate:.2f}, Curv={gps_curvature:.4f}, Status={current_status}")
+            print(f"Logged point: Lat={lat}, Lng={lng}, Speed={current_speed}km/h, Yaw={yaw_rate:.2f}, Curv={gps_curvature:.4f}, Status={current_status}, Head={gps_estimator.current_heading:.1f}")
             time.sleep(1.0)
                         
     except KeyboardInterrupt:

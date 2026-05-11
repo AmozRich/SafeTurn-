@@ -1,34 +1,11 @@
 [
     {
-        "lat": 10.0889,
-        "lon": 77.0595,
-        "status": "Sharp Curve",
-        "optimal_speed": 25,
-        "created_at": "2026-03-31T13:20:00",
-        "updated_at": "2026-03-31T13:20:00"
-    },
-    {
-        "lat": 10.0905,
-        "lon": 77.0620,
-        "status": "Curve",
-        "optimal_speed": 35,
-        "created_at": "2026-03-31T13:21:00",
-        "updated_at": "2026-03-31T13:21:00"
-    },
-    {
-        "lat": 10.0910,
-        "lon": 77.0650,
-        "status": "Slight Curve",
-        "optimal_speed": 45,
-        "created_at": "2026-03-31T13:22:00",
-        "updated_at": "2026-03-31T13:22:00"
-    },
-    {
-        "lat": 10.0850,
-        "lon": 77.0580,
-        "status": "Sharp Curve",
+        "lat": 9.589489,
+        "lon": 76.978971,
+        "status": "Sharp Left",
         "optimal_speed": 30,
-        "created_at": "2026-03-31T13:25:00",
-        "updated_at": "2026-03-31T13:25:00"
+        "heading": 0.0,
+        "created_at": "2026-05-11T15:09:44.887132",
+        "updated_at": "2026-05-11T15:09:44.887132"
     }
 ]

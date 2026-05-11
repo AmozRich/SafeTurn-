@@ -186,7 +186,7 @@ class StartScreen:
         self.bridge = bridge
         self.root = tk.Tk()
         self.root.title("SafeTurn+ Launcher")
-        self.root.geometry("620x720")
+        self.root.geometry("620x820")
         self.root.resizable(False, False)
         self.root.configure(bg=COLORS['bg_deep'])
 
@@ -339,9 +339,15 @@ class StartScreen:
         self.calib_btn.pack(anchor="w", pady=(6, 0))
         self._bind_hover(self.calib_btn, COLORS['warning'], "#E5A825")
 
+        # ── Divider ──
+        self._divider(self.root)
+
         # ── ACTION BUTTONS ──
+        tk.Label(self.root, text="ACTIONS", font=FONT_SECTION, bg=bg,
+                 fg=COLORS['text_muted']).pack(anchor="w", padx=38, pady=(10, 6))
+
         btn_frame = tk.Frame(self.root, bg=bg)
-        btn_frame.pack(fill=tk.X, padx=35, pady=(15, 0))
+        btn_frame.pack(fill=tk.X, padx=35, pady=(0, 0))
 
         self.launch_btn = tk.Button(btn_frame, text="▶   L A U N C H",
                                      font=FONT_BTN, bg=COLORS['accent_glow'],
@@ -353,12 +359,12 @@ class StartScreen:
         self._bind_hover(self.launch_btn, COLORS['accent_glow'], COLORS['accent'])
 
         map_btn = tk.Button(btn_frame, text="🗺  View Hazard Map",
-                             font=FONT_BTN_SM, bg=COLORS['bg_card'],
-                             fg=COLORS['text_muted'], relief=tk.FLAT, bd=0, pady=8,
-                             cursor="hand2", activebackground=COLORS['bg_elevated'],
+                             font=FONT_BTN_SM, bg=COLORS['orange'],
+                             fg="#FFFFFF", relief=tk.FLAT, bd=0, pady=8,
+                             cursor="hand2", activebackground=COLORS['warning'],
                              command=self._view_map)
         map_btn.pack(fill=tk.X)
-        self._bind_hover(map_btn, COLORS['bg_card'], COLORS['bg_elevated'])
+        self._bind_hover(map_btn, COLORS['orange'], COLORS['warning'])
 
         # ── Footer ──
         tk.Label(self.root, text="SafeTurn+ v2.0  ·  Sensor Fusion ADAS",

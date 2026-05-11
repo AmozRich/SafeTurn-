@@ -239,7 +239,7 @@ def draw_minimalist_hud(image, speed, status, optimal_speed, left_pts, right_pts
 def main():
     # Pass an unstarted bridge so the UI can enable sensor checkboxes
     # Connection logic runs asynchronously if requested later
-    bridge = SensorBridge(port='COM6', baud=115200)
+    bridge = SensorBridge() # Uses default from config.py
 
     # Launch Start Screen
     screen = StartScreen(bridge=bridge)

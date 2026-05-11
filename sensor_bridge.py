@@ -2,9 +2,10 @@ import serial
 import threading
 import json
 import time
+from config import SENSOR_PORT, SENSOR_BAUD_RATE
 
 class SensorBridge:
-    def __init__(self, port='COM7', baud=115200):
+    def __init__(self, port=SENSOR_PORT, baud=SENSOR_BAUD_RATE):
         self.port = port
         self.baud = baud
         self.running = False

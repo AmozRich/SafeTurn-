@@ -5,10 +5,10 @@ import os
 from datetime import datetime
 from sensor_bridge import SensorBridge
 from gps_utils import GPSCurvatureEstimator, classify_curve
+from config import SENSOR_PORT, SENSOR_BAUD_RATE
 
-# Change this to your actual COM port (e.g., 'COM3' on Windows, '/dev/ttyUSB0' on Linux/Mac)
-PORT = 'COM10'
-BAUD = 115200
+PORT = SENSOR_PORT
+BAUD = SENSOR_BAUD_RATE
 
 def test_sensors():
     print(f"Starting Sensor Bridge on {PORT} at {BAUD} baud...")
